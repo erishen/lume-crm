@@ -44,8 +44,17 @@ spec:
             # 只读演示模式（默认开）：8 个写路由 403 + Agent 仅 2 个查询工具。
             - name: LUME_CRM_READONLY
               value: "1"
+            # LLM 上游：k3s Pod 内 host.docker.internal 可达宿主网关。URL 与
+            # key 都放 Secret（真实网关地址不写死进仓库；先建：
+            #   kubectl create secret generic lume-crm-llm \
+            #     --from-literal=url=http://host.docker.internal:<port>/v1/chat/completions \
+            #     --from-literal=apikey=<网关签发的 key>
+            # 任一不配则聊天走离线演示引擎）。
             - name: LLM_API_URL
-              value: "http://host.docker.internal:<port>/v1/chat/completions"
+              valueFrom:
+                secretKeyRef:
+                  name: lume-crm-llm
+                  key: url
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:

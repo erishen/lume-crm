@@ -77,10 +77,10 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 
 - `crm.lume` 的 `bind` 默认 `127.0.0.1`,容器内需 `LUME_BIND=0.0.0.0` 才能被
   `-p` 端口映射命中;本地开发仍是安全的回环绑定(见 `server{}`)。
-- **容器内真实 LLM(已接好)**:compose 已注入 `LLM_API_URL`(本机 LLM 网关
-  `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;key 不入库
-  ——放同目录 `.env`(gitignored) 一行 `LLM_API_KEY=...`,compose 经
-  `${LLM_API_KEY}` 变量替换注入。不配 key 则聊天回落离线演示引擎。
+- **容器内真实 LLM(已接好)**:compose 从 `.env` 注入 `LLM_API_URL`(指向你自己的
+  LLM 网关,如 `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;
+  URL/key 都不写死缺省——放同目录 `.env`(gitignored),compose 经 `${VAR}` 变量
+  替换注入。任一不配则聊天回落离线演示引擎。
 - **SSR 客户分享页**:`GET /share/customer?id=<n>` 纯服务端渲染(el/html 组件,
   零 JavaScript,自包含 CSS),可直接外发链接展示单个客户全档(商机/跟进)。
   客户字段全部经 `html()` 标量槽输出——自动转义,存储型 XSS 不可行(有实测)。

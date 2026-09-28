@@ -10,7 +10,7 @@
 # DNS 说明(实测厘清, 修正早期"alpine DNS 坑"的过虑):
 #   lume 的 LLM 调用是 fork + execlp 系统里的 curl(agent-httpd/src/agent/agent.c),
 #   DNS 由 alpine 自带 musl curl 解析(走 Docker 内嵌 DNS), host.docker.internal
-#   等主机名正常可用 —— lume-invest 同款部署(容器内调 host.docker.internal:<port>
+#   等主机名正常可用 —— 同款部署(容器内调 host.docker.internal:<port>
 #   的本机 LLM 网关)已实测跑通。lume 本体不解析域名; 只有当 lume 自身需要出域解析时
 #   (静态 glibc 二进制缺 libnss_*.so)才需数字 IP 或 debian 基底。
 #   curl 是真实 LLM 的硬依赖(alpine 基础镜像不带, 必须显式安装)。

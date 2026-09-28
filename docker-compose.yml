@@ -12,11 +12,13 @@ services:
       - "11080:8089"          # 本地验证(宿主侧 >10000 且非 Chrome 受限端口); 公网改为 "127.0.0.1:11080:8089"
     environment:
       LUME_BIND: "0.0.0.0"     # 容器内需 0.0.0.0 才能被端口映射命中
-      # ---- 真实 LLM(OpenAI 兼容; 不配 LLM_API_KEY 则聊天走离线演示引擎) ----
-      # key 不写这里(会入库): 放同目录 .env(gitignored), compose 用 ${LLM_API_KEY}
-      # 变量替换注入。URL 指向本机 LLM 网关; host.docker.internal 由 musl curl
-      # 解析, alpine 下可用(实测 lume-invest 同款部署跑通)。
-      LLM_API_URL: "${LLM_API_URL:-http://host.docker.internal:<port>/v1/chat/completions}"
+      # ---- 真实 LLM(OpenAI 兼容; 不配 LLM_API_KEY/LLM_API_URL 则聊天走离线演示引擎) ----
+      # URL/key 都不写死缺省(仓库不暴露任何真实网关地址): 全放同目录 .env
+      # (gitignored), compose 用 ${VAR} 变量替换注入, 示例:
+      #   LLM_API_URL=http://host.docker.internal:<port>/v1/chat/completions
+      #   LLM_MODEL=auto / LLM_API_KEY=<网关签发的 key>
+      # host.docker.internal 由 musl curl 解析, alpine 下可用。
+      LLM_API_URL: "${LLM_API_URL:-}"
       LLM_MODEL: "${LLM_MODEL:-auto}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       # ---- 只读演示模式(公网推荐, 默认开) ----
