@@ -1,0 +1,18 @@
+# 依赖(符号链接到 ../lume/frontend/node_modules)
+node_modules/
+
+# 数据 / 密钥
+.data/
+.env
+
+# 运行日志
+logs/
+*.log
+
+# 构建产物(esbuild 输出);手写的 www/app.css 与 www/index.html 是源码,保留
+www/app.js
+www/chunk-*.js
+
+# bin/(本仓不自建二进制,用 ../lume/bin/lume)
+bin/
+!bin/.gitkeep

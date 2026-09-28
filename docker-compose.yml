@@ -1,0 +1,26 @@
+# lume-crm 容器编排
+#
+# 本地验证:  docker compose up --build  → http://127.0.0.1:11080 (无认证)
+# 公网部署(lume-crm.erishen.cn): 用下面的 ports 改绑 127.0.0.1 交给反代,
+#   并务必开启认证(取消 LUME_AUTH_* / HTPASSWD_FILE 注释 + 强密码),
+#   外层用 nginx/caddy 做反代 + TLS(见部署说明)。
+services:
+  crm:
+    build: .
+    image: lume-crm:latest
+    ports:
+      - "11080:8089"          # 本地验证(宿主侧 >10000 且非 Chrome 受限端口); 公网改为 "127.0.0.1:11080:8089"
+    environment:
+      LUME_BIND: "0.0.0.0"     # 容器内需 0.0.0.0 才能被端口映射命中
+      # ---- 公网部署必开(去掉注释, 并设强密码) ----
+      # LUME_AUTH_USER: "admin"
+      # LUME_AUTH_PASSWORD: "改成强密码"
+      # HTPASSWD_FILE: "/app/auth/htpasswd"
+      # 如需容器内真实 LLM(默认离线演示), 挂载含可达 LLM_API_URL 的 .env:
+      # LLM_API_URL: "http://host.docker.internal:<port>/v1"
+    volumes:
+      - crm_data:/app/.data    # SQLite 持久化
+    restart: unless-stopped
+
+volumes:
+  crm_data:

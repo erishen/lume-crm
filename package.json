@@ -1,0 +1,10 @@
+{
+  "name": "crm-ui",
+  "private": true,
+  "version": "0.3.0",
+  "description": "CRM client: React + TypeScript SPA (history routing, single app.js), bundled by esbuild into www/ for the Lume docroot. Build flags mirror Makefile / build.sh; the Lume server (crm.lume) serves www/ with spa=true.",
+  "scripts": {
+    "build": "esbuild src/crm/app.tsx --bundle --minify --format=esm --splitting --jsx=automatic --outdir=www --outbase=src/crm",
+    "dev": "esbuild src/crm/app.tsx --bundle --format=esm --splitting --jsx=automatic --outdir=www --outbase=src/crm --watch --serve=0"
+  }
+}

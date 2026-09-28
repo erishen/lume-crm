@@ -1,0 +1,10 @@
+# 不进构建上下文 / 镜像的资产
+.data
+node_modules
+.env
+.git
+*.log
+bin
+build
+tmp
+.DS_Store

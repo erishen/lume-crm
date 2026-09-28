@@ -1,0 +1,572 @@
+// crm/src/db.lume — CRM 领域层:SQLite 数据层 + 读写助手 + 聊天工具
+//
+// 数据落 .data/crm.db(SQLite,3 张表)。读路径走 sql_query(物理只读,
+// 免锁);写路径 flock 串行 + sql_write(护栏写),新 id 用 MAX(id)+1
+// (last_insert_rowid 跨连接不可用)。
+//
+// 内建特性用法(见 lume/docs/STYLE.md):
+//   - sql_* 失败置 sticky VM error → 一律 try(() => sql_*(...)) 捕获,
+//     固定 { ok, err } 键直接成员访问
+//   - 回调单表达式用表达式体箭头:map((c) => {...}) 多语句才开块
+//   - 值一律 ? 占位符绑定(参数不进 SQL 文本,杜绝注入)
+//   - LIKE ? 参数化模糊搜索,通配符在 DSL 侧拼接(仍是绑定值,不进 SQL)
+//   - 业务字典常量(阶段/终态/默认)是 SQL 条件的单一事实源:stats 与
+//     留痕逻辑都从 closed_stages 生成,不在各处硬编码阶段名
+
+let crm_db = ".data/crm.db";
+let crm_lock_path = ".data/.crm.lock";   // 不能与 crm_lock() 同名
+
+// ------------------------------------------------ 业务字典(单一事实源)
+// 阶段白名单:服务端强制(add/update_deal 校验),前端选项经 /api/meta 下发,
+// 不靠前端自觉。新增阶段只改这里一处。
+let deal_stages = ["初步接洽", "方案", "谈判", "成交", "丢单"];
+// 已决(终态)阶段:推进到这里的商机不再计入开放管道;update_deal 自动留痕、
+// stats_payload 的开放管道统计共用这一份,不各自硬编码。
+let closed_stages = ["成交", "丢单"];
+// 默认阶段(add_deal 的 stage 空串兜底) = 第一个开放阶段
+let default_stage = "初步接洽";
+// 跟进类型建议集(前端选项 + 工具描述用;服务端不硬校验 kind,允许自定义)
+let activity_kinds = ["电话", "会议", "邮件", "拜访", "记录"];
+
+func in_list(xs, v) {
+  let found = false;
+  for (x in xs) {
+    if (x == v) {
+      found = true;
+    }
+  }
+  return found;
+}
+
+// 商机阶段合法性:空串(=不改/默认)放行,非空必须命中白名单
+func stage_valid(s) {
+  let sv = str(s);
+  if (sv == "") {
+    return true;
+  }
+  return in_list(deal_stages, sv);
+}
+
+// 把业务字典常量渲染成 SQL 的 'a', 'b' 字面量串(阶段名是本仓自己的常量,
+// 不是用户输入,拼进 SQL 文本安全;参数绑定只面向调用方数据)。
+// 新增/调整阶段只改上面的 let,stats 与留痕逻辑自动跟随。
+func in_clause(xs) {
+  let s = "";
+  for (x in xs) {
+    if (s == "") {
+      s = "'" + str(x) + "'";
+    } else {
+      s = s + ", '" + str(x) + "'";
+    }
+  }
+  return s;
+}
+
+// 白名单连接成 "a / b / c",错误消息里告诉调用方合法值
+func stages_str() {
+  let s = "";
+  for (x in deal_stages) {
+    if (s == "") {
+      s = str(x);
+    } else {
+      s = s + " / " + str(x);
+    }
+  }
+  return s;
+}
+
+// ---------------------------------------------------------------- 建库/建表
+mkdir(".data");
+
+// 首跑初始化:库文件不存在时造 0 字节(sql_write 的 open 不带 CREATE 标志,
+// 打不开缺失文件;write_file 只在确实缺失时用——原子写会覆盖,不能每次跑)。
+func ensure_db() {
+  let exists = false;
+  for (f in files(".data")) {
+    if (f == "crm.db") {
+      exists = true;
+    }
+  }
+  if (not exists) {
+    let w = try(() => write_file(crm_db, ""));
+    if (w.err != null) {
+      print("警告: 无法创建 " + crm_db + ": " + w.err);
+      return;
+    }
+  }
+  let ddl = [
+    "CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, company TEXT, email TEXT, phone TEXT, created INTEGER)",
+    "CREATE TABLE IF NOT EXISTS deals (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER, title TEXT, stage TEXT, amount REAL, updated INTEGER)",
+    "CREATE TABLE IF NOT EXISTS activities (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER, kind TEXT, note TEXT, at INTEGER)",
+  ];
+  for (s in ddl) {
+    let r = try(() => sql_write(crm_db, s));
+    if (r.err != null) {
+      print("警告: 建表失败: " + r.err);
+      return;
+    }
+  }
+  // 种子:customers 表为空才灌(重复启动幂等)
+  let nc = q("SELECT COUNT(*) AS n FROM customers", null);
+  if (int(get(get(nc, 0, {}), "n", 0)) > 0) {
+    return;
+  }
+  let t = now();
+  // 列表不支持 list[i] 下标(解析器遇 [ 报错),嵌套 [sql, params] 取不出;
+  // 用 map 字面量(sql/params 键,成员访问 e.sql / e.params)承载
+  let seed = [
+    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [1, "林晓", "蓝湾科技", "linxiao@lanwan.dev", "13800000001", t] },
+    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [2, "陈默", "山海资本", "chenmo@shancai.vc", "13800000002", t] },
+    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [1, 1, "蓝湾 · 私有部署", "谈判", 120000.0, t] },
+    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [2, 2, "山海 · 年度席位", "初步接洽", 45000.0, t] },
+    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [1, 1, "会议", "需求评审,确认私有化部署要求", t - 86400] },
+    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [2, 2, "电话", "首次触达,约了下周演示", t - 172800] },
+  ];
+  for (s in seed) {
+    let r = try(() => sql_write(crm_db, s.sql, s.params));
+    if (r.err != null) {
+      print("警告: 种子写入失败: " + r.err);
+      return;
+    }
+  }
+  print("crm: SQLite 初始化完成(" + crm_db + ", 种子数据已注入)");
+}
+
+// ---------------------------------------------------------------- 查询助手
+// 只读:sql_query 物理只读 + 参数绑定。失败(sticky error)兜底空列表,
+// 路由降级为"空数据"而不是 500。
+func q(sql, params) {
+  let r = try(() => sql_query(crm_db, sql, params));
+  if (r.ok == null) {
+    return [];
+  }
+  return r.ok;
+}
+
+// 时间戳显示:SQL 侧 strftime 只认 UTC,本地时区在 DSL 侧用内建 strftime
+// (localtime)补,与旧 JSON 版行为一致。
+func fmt_ts(ts) {
+  return strftime("%Y-%m-%d", int(ts));
+}
+
+// ---------------------------------------------------------------- 读路径
+// 客户总表(含关联计数/管道金额):一条 SELECT 出全,免应用层聚合循环。
+export func customer_list(query, sort) {
+  let sql = "SELECT c.id, c.name, c.company, c.email, c.phone, c.created,"
+    + " (SELECT COUNT(*) FROM deals WHERE customer = c.id) AS deal_count,"
+    + " (SELECT COUNT(*) FROM activities WHERE customer = c.id) AS activity_count,"
+    + " (SELECT COALESCE(SUM(amount), 0.0) FROM deals WHERE customer = c.id) AS pipeline"
+    + " FROM customers c";
+  let params = null;
+  if (query != "") {
+    sql = sql + " WHERE c.name LIKE ? OR c.company LIKE ? OR c.email LIKE ?";
+    let pat = "%" + query + "%";   // 通配符拼接后仍是绑定值,不进 SQL 文本
+    params = [pat, pat, pat];
+  }
+  // 排序:默认 id 升序;sort="pipeline" 时管道金额降序(并列回退 id)
+  let order = "ORDER BY c.id";
+  if (str(sort) == "pipeline") {
+    order = "ORDER BY pipeline DESC, c.id";
+  }
+  let rs = q(sql + " " + order, params);
+  return map((c) => {
+    put(c, "created_fmt", fmt_ts(c.created));
+    return c;
+  }, rs);
+}
+
+// 单个客户全档:基础信息 + 名下商机 + 跟进记录(跟进倒序,最新在前;
+// 展示用的本地时间字段在 DSL 侧补:created_fmt / updated_fmt / at_fmt)
+export func customer_by_id(cid) {
+  let rs = q("SELECT id, name, company, email, phone, created FROM customers WHERE id = ?", [cid]);
+  if (len(rs) == 0) {
+    return null;
+  }
+  let c = get(rs, 0, {});
+  put(c, "created_fmt", fmt_ts(c.created));
+  put(c, "deals", map((dl) => {
+    put(dl, "updated_fmt", fmt_ts(dl.updated));
+    return dl;
+  }, q("SELECT id, customer, title, stage, amount, updated FROM deals WHERE customer = ? ORDER BY id", [cid])));
+  put(c, "activities", map((a) => {
+    put(a, "at_fmt", strftime("%Y-%m-%d %H:%M", int(a.at)));
+    return a;
+  }, q("SELECT id, customer, kind, note, at FROM activities WHERE customer = ? ORDER BY at DESC, id DESC", [cid])));
+  return c;
+}
+
+// 仪表盘统计:按阶段聚合 + 开放管道 + 客户总表,全在 SQL 里算完
+export func stats_payload() {
+  let custs = customer_list("", "");
+  let by_stage = {};
+  for (s in q("SELECT stage, COUNT(*) AS n, COALESCE(SUM(amount), 0.0) AS amt FROM deals GROUP BY stage", null)) {
+    put(by_stage, s.stage, int(s.n));
+    put(by_stage, s.stage + ".amt", float(s.amt));
+  }
+  // 开放管道 = 非终态商机;"哪些算终态"从 closed_stages 字典生成,
+  // 与 update_deal 的自动留痕共用同一份阶段定义。
+  let open = q("SELECT COALESCE(SUM(amount), 0.0) AS t FROM deals WHERE stage NOT IN (" + in_clause(closed_stages) + ")", null);
+  let won = q("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0.0) AS t FROM deals WHERE stage = '成交'", null);
+  let lost = q("SELECT COUNT(*) AS n FROM deals WHERE stage = '丢单'", null);
+  let won_n = int(get(get(won, 0, {}), "n", 0));
+  let won_amt = float(get(get(won, 0, {}), "t", 0.0));
+  let lost_n = int(get(get(lost, 0, {}), "n", 0));
+  // 成交率:只在有已决商机(成交或丢单)时算,分母为 0 给 0.0
+  let decided = won_n + lost_n;
+  let win_rate = 0.0;
+  if (decided > 0) {
+    win_rate = float(won_n) / float(decided);
+  }
+  return {
+    customer_count: len(custs),
+    deal_count: int(get(get(q("SELECT COUNT(*) AS n FROM deals", null), 0, {}), "n", 0)),
+    open_pipeline: float(get(get(open, 0, {}), "t", 0.0)),
+    won_deals: won_n,
+    won_amount: won_amt,
+    lost_deals: lost_n,
+    win_rate: win_rate,
+    by_stage: by_stage,
+    customers: custs,
+  };
+}
+
+// ---------------------------------------------------------------- 写路径
+// 纪律:全程 flock(SQLite C 侧未设 busy_timeout,worker 并发写靠应用层
+// 串行);sql_write 失败经 try 捕获,逐路径解锁后返回带 status 的 err。
+// 新 id = MAX(id)+1(持锁期间安全);flock 锁文件父目录要自己 mkdir。
+
+export func crm_lock() {
+  mkdir(".data");
+  return lock_file(crm_lock_path, 3000);
+}
+
+export func crm_unlock() {
+  unlock_file();
+}
+
+func next_id(table) {
+  let rs = q("SELECT MAX(id) AS id FROM " + table, null);
+  let v = get(get(rs, 0, {}), "id", null);
+  if (v == null) {
+    return 1;
+  }
+  return int(v) + 1;
+}
+
+// 客户存在性检查(护栏:挂单/记跟进前先验)
+func customer_exists(cid) {
+  return int(get(get(q("SELECT COUNT(*) AS n FROM customers WHERE id = ?", [cid]), 0, {}), "n", 0)) > 0;
+}
+
+export func add_customer(name, company, email, phone) {
+  if (str(name) == "") {
+    return { err: "name 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  let cid = next_id("customers");
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)",
+    [cid, name, company, email, phone, now()]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 写入失败: " + r.err, status: 500 };
+  }
+  return { ok: true, id: cid, name: name };
+}
+
+// 改客户资料:空串 = 不改该字段(与 update_deal 同款语义),name 非空才覆盖。
+export func update_customer(cid, name, company, email, phone) {
+  if (int(cid) <= 0) {
+    return { err: "customer_id 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  let rs = q("SELECT name, company, email, phone FROM customers WHERE id = ?", [int(cid)]);
+  if (len(rs) == 0) {
+    crm_unlock();
+    return { err: "客户 " + str(cid) + " 不存在", status: 404 };
+  }
+  let c = get(rs, 0, {});
+  let name_v = str(name);
+  if (name_v != "") {
+    put(c, "name", name_v);
+  }
+  let company_v = str(company);
+  if (company_v != "") {
+    put(c, "company", company_v);
+  }
+  let email_v = str(email);
+  if (email_v != "") {
+    put(c, "email", email_v);
+  }
+  let phone_v = str(phone);
+  if (phone_v != "") {
+    put(c, "phone", phone_v);
+  }
+  let r = try(() => sql_write(crm_db,
+    "UPDATE customers SET name = ?, company = ?, email = ?, phone = ? WHERE id = ?",
+    [c.name, c.company, c.email, c.phone, int(cid)]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 写入失败: " + r.err, status: 500 };
+  }
+  return { ok: true, id: int(cid), name: c.name };
+}
+
+// 删除客户并级联清掉其名下商机/跟进(子表先删,主表后删)。
+export func delete_customer(cid) {
+  if (int(cid) <= 0) {
+    return { err: "customer_id 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  if (not customer_exists(int(cid))) {
+    crm_unlock();
+    return { err: "客户 " + str(cid) + " 不存在", status: 404 };
+  }
+  let rd = try(() => sql_write(crm_db, "DELETE FROM deals WHERE customer = ?", [int(cid)]));
+  if (rd.err != null) {
+    crm_unlock();
+    return { err: "删除商机失败: " + rd.err, status: 500 };
+  }
+  let ra = try(() => sql_write(crm_db, "DELETE FROM activities WHERE customer = ?", [int(cid)]));
+  if (ra.err != null) {
+    crm_unlock();
+    return { err: "删除跟进失败: " + ra.err, status: 500 };
+  }
+  let rc = try(() => sql_write(crm_db, "DELETE FROM customers WHERE id = ?", [int(cid)]));
+  crm_unlock();
+  if (rc.err != null) {
+    return { err: "删除客户失败: " + rc.err, status: 500 };
+  }
+  return {
+    ok: true, id: int(cid),
+    deals_deleted: int(get(rd, "ok", 0)),
+    activities_deleted: int(get(ra, "ok", 0)),
+  };
+}
+
+export func add_deal(cid, title, stage, amount) {
+  if (str(title) == "" or int(cid) <= 0) {
+    return { err: "customer_id 与 title 必填", status: 400 };
+  }
+  // 阶段白名单(服务端强制,不靠前端自觉):非空且不在 deal_stages 里 → 400
+  if (not stage_valid(stage)) {
+    return { err: "阶段必须是: " + stages_str(), status: 400 };
+  }
+  if (float(amount) < 0) {
+    return { err: "金额不能为负", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  if (not customer_exists(int(cid))) {
+    crm_unlock();
+    return { err: "客户 " + str(cid) + " 不存在", status: 404 };
+  }
+  let stage_v = str(stage);
+  if (stage_v == "") {
+    stage_v = default_stage;
+  }
+  let did = next_id("deals");
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)",
+    [did, int(cid), title, stage_v, amount, now()]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 写入失败: " + r.err, status: 500 };
+  }
+  return { ok: true, deal_id: did, customer_id: int(cid), stage: stage_v, amount: amount };
+}
+
+export func update_deal(did, stage, title, amount) {
+  if (int(did) <= 0) {
+    return { err: "deal_id 必填", status: 400 };
+  }
+  // 阶段白名单:传了非空 stage 才校验,空串=不改(与 add_deal 同一 helper)
+  if (not stage_valid(stage)) {
+    return { err: "阶段必须是: " + stages_str(), status: 400 };
+  }
+  if (float(amount) < 0) {
+    return { err: "金额不能为负", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  let rs = q("SELECT customer, title, stage, amount, updated FROM deals WHERE id = ?", [int(did)]);
+  if (len(rs) == 0) {
+    crm_unlock();
+    return { err: "商机 " + str(did) + " 不存在", status: 404 };
+  }
+  let de = get(rs, 0, {});
+  let old_stage = str(de.stage);
+  // "空串/零值 = 不改该字段"语义在 DSL 侧做:读出旧值,新值非零才覆盖
+  let stage_v = str(stage);
+  if (stage_v != "") {
+    put(de, "stage", stage_v);
+  }
+  let title_v = str(title);
+  if (title_v != "") {
+    put(de, "title", title_v);
+  }
+  let amount_v = float(amount);
+  if (amount_v > 0) {
+    put(de, "amount", amount_v);
+  }
+  put(de, "updated", now());
+  let r = try(() => sql_write(crm_db,
+    "UPDATE deals SET customer = ?, title = ?, stage = ?, amount = ?, updated = ? WHERE id = ?",
+    [de.customer, de.title, de.stage, de.amount, de.updated, int(did)]));
+  // 业务留痕:主写成功后,推进到终态(closed_stages 字典)且阶段确实变化 →
+  // 同锁内自动记一条系统跟进。不能复用 add_activity(它内部会重拿锁,替换当前这把)。
+  let closed = false;
+  if (r.err == null and old_stage != str(de.stage) and in_list(closed_stages, str(de.stage))) {
+    closed = true;
+    let aid = next_id("activities");
+    let sys_note = "商机《" + str(de.title) + "》推进：" + old_stage + " → " + de.stage;
+    try(() => sql_write(crm_db,
+      "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)",
+      [aid, int(de.customer), "系统", sys_note, now()]));
+  }
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 写入失败: " + r.err, status: 500 };
+  }
+  return { ok: true, deal_id: int(did), stage: de.stage, amount: de.amount, closed: closed };
+}
+
+export func add_activity(cid, kind, note) {
+  if (str(note) == "" or int(cid) <= 0) {
+    return { err: "customer_id 与 note 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  if (not customer_exists(int(cid))) {
+    crm_unlock();
+    return { err: "客户 " + str(cid) + " 不存在", status: 404 };
+  }
+  let kind_v = str(kind);
+  if (kind_v == "") {
+    kind_v = "记录";
+  }
+  let aid = next_id("activities");
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)",
+    [aid, int(cid), kind_v, note, now()]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 写入失败: " + r.err, status: 500 };
+  }
+  return { ok: true, activity_id: aid, customer_id: int(cid), kind: kind_v };
+}
+
+// 删一条商机(误挂/重复录入的清理;成交/丢单也可删,删完不进管道统计)
+export func delete_deal(did) {
+  if (int(did) <= 0) {
+    return { err: "deal_id 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  let rs = q("SELECT customer FROM deals WHERE id = ?", [int(did)]);
+  if (len(rs) == 0) {
+    crm_unlock();
+    return { err: "商机 " + str(did) + " 不存在", status: 404 };
+  }
+  let r = try(() => sql_write(crm_db, "DELETE FROM deals WHERE id = ?", [int(did)]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 删除失败: " + r.err, status: 500 };
+  }
+  return { ok: true, deal_id: int(did) };
+}
+
+// 删一条跟进(误记/作废留痕记录)
+export func delete_activity(aid) {
+  if (int(aid) <= 0) {
+    return { err: "activity_id 必填", status: 400 };
+  }
+  if (not crm_lock()) {
+    return { err: "写锁超时,请重试", status: 409 };
+  }
+  let rs = q("SELECT id FROM activities WHERE id = ?", [int(aid)]);
+  if (len(rs) == 0) {
+    crm_unlock();
+    return { err: "跟进 " + str(aid) + " 不存在", status: 404 };
+  }
+  let r = try(() => sql_write(crm_db, "DELETE FROM activities WHERE id = ?", [int(aid)]));
+  crm_unlock();
+  if (r.err != null) {
+    return { err: "SQLite 删除失败: " + r.err, status: 500 };
+  }
+  return { ok: true, activity_id: int(aid) };
+}
+
+// 业务字典下发:阶段白名单 + 终态标记 + 跟进类型建议集,前端选项单一事实源。
+export func meta_payload() {
+  return {
+    deal_stages: deal_stages,
+    closed_stages: closed_stages,
+    default_stage: default_stage,
+    activity_kinds: activity_kinds,
+  };
+}
+
+// ---------------------------------------------------------------- 聊天工具
+// typed 参数自动生成 JSON schema,缺键按类型零值(int→0, string→"")。
+// 工具 = 助手薄壳:校验/锁/写全在助手里,工具只做参数适配。
+
+tool "crm_search_customers", "在 CRM 中搜索客户。query 空串 = 返回全部;否则按 姓名/公司/邮箱 模糊匹配(子串)。返回客户列表(含 pipeline 金额与商机数)。", { query: string }, (arg) => {
+  let all = customer_list(arg.query, "");
+  return { count: len(all), customers: all };
+};
+
+tool "crm_get_customer", "取单个客户全档(基础信息 + 名下所有商机与跟进记录)。customer_id 必须存在。", { customer_id: int }, (arg) => {
+  let c = customer_by_id(arg.customer_id);
+  if (c == null) {
+    return { err: "客户 " + str(arg.customer_id) + " 不存在" };
+  }
+  return c;
+};
+
+tool "crm_add_customer", "新建客户。name 必填;company/email/phone 可空(空串占位)。", { name: string, company: string, email: string, phone: string }, (arg) => {
+  return add_customer(arg.name, arg.company, arg.email, arg.phone);
+};
+
+tool "crm_update_customer", "改客户资料(公司/邮箱/电话/姓名)。customer_id 必须已存在;空串字段不改。", { customer_id: int, name: string, company: string, email: string, phone: string }, (arg) => {
+  return update_customer(arg.customer_id, arg.name, arg.company, arg.email, arg.phone);
+};
+
+tool "crm_delete_customer", "删除客户并级联清掉其名下全部商机与跟进记录。customer_id 必须已存在;操作不可撤销。", { customer_id: int }, (arg) => {
+  return delete_customer(arg.customer_id);
+};
+
+tool "crm_add_deal", "给某客户挂一条商机。customer_id 必须已存在;stage 建议用 初步接洽/方案/谈判/成交/丢单,空串默认 初步接洽。", { customer_id: int, title: string, stage: string, amount: float }, (arg) => {
+  return add_deal(arg.customer_id, arg.title, arg.stage, arg.amount);
+};
+
+tool "crm_update_deal", "改一条商机的阶段/金额/标题(推进管道用,如 谈判→成交)。deal_id 必须已存在;空串/零值字段不改。", { deal_id: int, stage: string, amount: float, title: string }, (arg) => {
+  return update_deal(arg.deal_id, arg.stage, arg.title, arg.amount);
+};
+
+tool "crm_add_activity", "给客户记一条跟进(电话/会议/邮件/拜访…),note 必填;kind 空串默认 记录。", { customer_id: int, kind: string, note: string }, (arg) => {
+  return add_activity(arg.customer_id, arg.kind, arg.note);
+};
+
+tool "crm_delete_deal", "删一条商机(误挂/重复录入)。deal_id 必须已存在;删后不再计入管道统计。", { deal_id: int }, (arg) => {
+  return delete_deal(arg.deal_id);
+};
+
+tool "crm_delete_activity", "删一条跟进记录(误记/作废)。activity_id 必须已存在。", { activity_id: int }, (arg) => {
+  return delete_activity(arg.activity_id);
+};
+
+// 模块 import 即执行:main 进程初始化库(建表+种子),fork 的 worker 继承。
+// 幂等——表/种子都在,重复启动不重复灌。放在文件末尾:此时 q()/sql_* 助手
+// 已全部定义,ensure_db 内部调用才满足 Lume "被调函数先声明" 的顺序要求。
+ensure_db();

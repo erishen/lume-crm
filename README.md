@@ -1,0 +1,152 @@
+# Lume CRM — 用 Lume 开发 CRM 后台管理系统的完整样板
+
+> **这个项目想证明一件事:后台管理系统(CRM 这类)可以完全用 Lume 开发。**
+> 从数据库到 API 到 Agent 到前端壳,服务端没有一行其它语言——一个 C11
+> 单二进制 `lume` + 一份 `.lume` 脚本,就撑起了一整套客户/商机/跟进管理后台。
+> 它不是「Lume 玩具」,是一个能直接跑、有真实数据模型与业务规则、带 LLM
+> Agent 交互的 admin 系统样板,拿来照着写下一个内部系统即可。
+
+## 它展示了 Lume 做后台的哪些能力
+
+| 后台要素 | 本项目里由 Lume 提供的 | 对应文件 |
+|---|---|---|
+| 数据库 | 原生 `sql_query`(物理只读)/ `sql_write`(护栏写),参数绑定杜绝注入 | `src/db.lume` |
+| 领域模型 | 客户/商机/跟进三表 + 级联删除 + 管道推进自动留痕 + 成交率统计 | `src/db.lume` |
+| REST API | 路由糖 `get`/`post`,错误码 + JSON 响应体,并发写 flock 串行 | `crm.lume` |
+| LLM Agent | `tool` 注册(10 个 typed 工具)/ SSE 聊天 `/react/api/chat`,缺键零值兜底 | `src/db.lume` + `crm.lume` |
+| 前端 SPA | `server { spa = true }` history 路由回退 + 单 `app.js` React 壳 | `crm.lume` + `src/crm/` |
+| 强类型 | `.lume` 全量 `--check`,首错即停,同名/缺键/类型错编译期拦截 | 全量 |
+
+> 一句话:**写业务只写 `.lume` + 前端,不碰任何其它语言运行时。**
+
+## 技术形态
+
+业务逻辑全在一个 `.lume` 脚本里(C11 单二进制 `lume` 服务端),前端是 React +
+TypeScript **单页应用(history 路由)**,esbuild 打成单一 `app.js` 落进 docroot。
+没有 Node 服务——数据是 **Lume 原生 SQLite 内建**(`sql_query` 物理只读 /
+`sql_write` 护栏写 + flock 串行,`.data/crm.db`),前端靠 JSON API + SSE Agent
+聊天驱动。
+
+SPA 说明:`server { spa = true }` 让静态 404(GET + Accept:text/html)回退到
+docroot 根的 `index.html`,所以能用**干净 URL**(`/customers/3`)、刷新不 404。
+点击站内链接走 `pushState` 客户端导航(无白屏抖动),API/fetch 的 404 不受影响。
+
+## 快速开始
+
+```bash
+make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停)
+# → http://127.0.0.1:8089
+```
+
+其他目标:`make check`(DSL 类型检查) · `make ui`(只构建前端) ·
+`make crm-dev`(前端热更新 + 起服务) · `make clean`(清产物与数据)。
+`sh run.sh` 是 Makefile 之外的等价独立脚本入口。
+
+页面(SPA history 路由,干净 URL):`/` 仪表盘 · `/customers` 客户 ·
+`/customers/N` 客户详情 · `/chat` Agent。任意路由直接访问 / 刷新都能打开
+(`spa=true` 回退到壳)。
+
+依赖:Lume 用 **release 版本**(不再依赖源码树 `../lume`)。安装:
+`curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh | sh`
+(二进制落在 `~/.local/bin/lume`;CRM 用到的 DSL 特性需 `lume >= v0.5.0`,安装时
+建议固定版本 `LUME_VERSION=v0.5.0 sh install.sh`)。前端 esbuild 优先用本目录
+`npm install` 后的 `./node_modules/.bin/esbuild`,其次 PATH,最后兜底
+`../lume/frontend/node_modules`(过渡);React 同样由 node_modules 解析。
+
+## Docker
+
+镜像基于 `ubuntu:24.04`:发布版 lume 二进制在 CI(ubuntu-latest)编出,要求
+`GLIBC_2.38`,`debian:bookworm` 的 glibc 2.36 会让 lume 启动即崩;发布版又
+动态链 `libsqlite3`,故镜像装了 `libsqlite3-0`。容器内用官方 `install.sh` 拉
+Linux 二进制,前端 `www/` 是宿主 `make ui` 产出的纯静态包,直接 COPY。
+
+```bash
+make ui                   # 先构建前端(产出 www/app.js)
+docker build -t lume-crm:latest .
+docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
+# → http://localhost:8089
+```
+
+- `crm.lume` 的 `bind` 默认 `127.0.0.1`,容器内需 `LUME_BIND=0.0.0.0` 才能被
+  `-p` 端口映射命中;本地开发仍是安全的回环绑定(见 `server{}`)。
+- **公网鉴权(重要)**:`server{ htpasswd = env("HTPASSWD_FILE") }` 已接好,但
+  经实测 lume 发布版二进制**只对内置路由强制 Basic Auth,自定义 `/api/*` 不挡**
+  —— 而 CRM 的接口全是自定义路由、聊天工具还能读写 `.data/crm.db`。所以公网
+  部署**必须在反向代理层(nginx/caddy)做 Basic Auth + TLS**,不能只靠 lume 内置
+  鉴权。`deploy/nginx-lume-crm.conf` 是直接可用的反代模板(全员 Basic Auth)。
+  容器内仍可用 `LUME_AUTH_PASSWORD` 生成 `$6$` 哈希作纵深防御。
+- `.env`(含本地网关 key)不进镜像;生产若要容器内真实 LLM,挂一份含可达
+  `LLM_API_URL` 的 `.env` 并设 `LLM_API_URL` 环境变量即可(默认离线演示)。
+
+## 布局
+
+```
+crm.lume          入口:server{} + HTTP 路由 + body 解析糖 + import 领域库
+src/db.lume       领域层:SQLite 数据层(建库/种子 + 读写助手 + crm_* 工具)
+src/api.ts        前端共享 API 层(types + fetch 封装)
+src/crm/app.tsx   SPA shell:history 路由(pushState) + 统一 Nav + 挂载三个视图
+src/crm/*.tsx     视图组件(dashboard/customers/chat,均 export,不自行挂载)
+www/app.css       手写共享样式(静态源,不走构建)
+www/index.html    SPA 壳(spa=true 的回退目标,加载 /app.js)
+www/app.js + www/chunk-*.js   esbuild 产物(gitignore)
+.data/crm.db      SQLite 数据(首次运行自动建表 + 注入种子数据)
+```
+
+## API
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/stats` | 仪表盘:客户数 / 商机数 / 开放管道 / 成交率(won/lost/won_amount/win_rate) / 按 stage 汇总 / 客户总表 |
+| `GET /api/customers[?q=]` | 客户列表(q 按姓名/公司/邮箱模糊筛,参数化 `LIKE`;`?sort=pipeline` 按管道金额降序) |
+| `GET /api/customer?id=N` | 客户全档(基础信息 + 名下商机[含 updated_fmt] + 跟进倒序[最新在前,含系统留痕]) |
+| `GET /api/meta` | 业务字典:阶段白名单 / 终态阶段 / 默认阶段 / 跟进类型建议集(前端选项单一事实源) |
+| `POST /api/customers` | 新建客户 `{name, company?, email?, phone?}` |
+| `POST /api/deals` | 挂商机 `{customer_id, title, stage?, amount?}`(stage 非空必须命中白名单,否则 400;金额不能为负) |
+| `POST /api/deals/update` | 推进管道 `{deal_id, stage?, amount?, title?}`(空/零值字段=不改;推进到终态自动记一条系统跟进) |
+| `POST /api/activities` | 记跟进 `{customer_id, kind?, note}` |
+| `POST /api/customers/update` | 改客户资料 `{customer_id, name?, company?, email?, phone?}`(空串字段=不改) |
+| `POST /api/customers/delete` | 删客户 + 级联清其名下商机/跟进 `{customer_id}`(级联三步逐步校验,不可撤销) |
+| `POST /api/deals/delete` | 删一条商机 `{deal_id}`(误挂/重复录入的清理) |
+| `POST /api/activities/delete` | 删一条跟进 `{activity_id}`(系统自动留痕不建议删,服务端不禁止) |
+| `POST /react/api/chat` | Agent SSE(框架原生,`crm_*` 工具已注册) |
+
+## Agent 工具(聊天页可用)
+
+`crm_search_customers` / `crm_get_customer` / `crm_add_customer` /
+`crm_update_customer` / `crm_delete_customer`(级联) /
+`crm_add_deal` / `crm_update_deal`(推进管道) / `crm_add_activity` /
+`crm_delete_deal` / `crm_delete_activity` —— 共 10 个 typed
+schema 自动生成,缺键零值兜底(空串/零值字段 = 不改该字段)。
+`crm_delete_customer` 会级联清掉该客户名下全部商机/跟进,聊天里慎用。
+`.env` 里 `LLM_API_KEY` 留空 = 离线演示引擎;填了才走真实模型。
+
+## 安全边界(照抄 invest 的纪律)
+
+- 服务只绑 `127.0.0.1`;写路径全部持 flock(SQLite C 侧未设 busy_timeout,
+  worker 并发写靠应用层串行),`sql_write` 走护栏(单语句、禁 DROP/ALTER/PRAGMA)
+- 服务端无鉴权,数据在 `.data/crm.db`——不要把端口暴露给不信任网络
+- 值一律 `?` 占位符绑定(参数不进 SQL 文本,杜绝注入);搜索用参数化 `LIKE`
+
+## 数据层设计(为什么要这么写)
+
+- **读免锁**:`sql_query` 物理只读(`SQLITE_OPEN_READONLY`),GET 路径不碰 flock
+- **新 id 用 `MAX(id)+1`**:`last_insert_rowid()` 跨连接不可靠(每次 exec 开
+  新连接),持锁期间 `MAX` 安全;插入显式带 `id`,AUTOINCREMENT 兜底
+- **首跑建库**:`sql_write` 的 open 不带 `CREATE` 标志,库文件不存在打不开 →
+  缺失时先 `write_file(db, "")` 造 0 字节空库(只在确实缺失时,原子写会覆盖
+  不能每次跑),再 `CREATE TABLE IF NOT EXISTS`
+- **写失败可捕获**:`sql_write` 失败置 sticky VM error + 返回 null → 写路径用
+  `try(() => sql_write(...))` 包,固定 `{ok,err}` 键
+- **聚合下沉 SQL**:客户总表 / 管道统计一条 `SELECT` + 子查询 + `GROUP BY`
+  出全,应用层不写循环聚合
+- **本地时区**:`strftime` 是 SQL 侧 UTC,本地时间戳用 Lume 内建 `strftime`
+  (localtime) 在 DSL 侧补,旧数据兼容
+- **业务字典单一事实源**:`deal_stages`(白名单)/ `closed_stages`(终态)/
+  `default_stage` 是阶段语义的唯一来源:服务端 `stage_valid` 强制校验、
+  `update_deal` 自动留痕、`stats_payload` 开放管道统计、`/api/meta` 下发前端
+  选项,全从同一组常量生成——新增/改阶段只动一处,不在各处硬编码阶段名
+- **审计留痕**:推进到终态且阶段变化 → 同锁内自动记一条 `kind=系统` 的
+  跟进(前端渲染为禁删的「系统」标签,服务端不禁止手删,保持通用);
+  级联删除(商机/跟进/客户)逐步校验,任一步失败即 500,不静默吞错
+- **展示数据服务端补全**:客户全档里商机带 `updated_fmt`、跟进按 `at DESC`
+  倒序(最新在前),前端不再二次排序/换算,减少一份时区与排序逻辑
