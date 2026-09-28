@@ -7,14 +7,13 @@
 #   可换 alpine(而非 debian/ubuntu), 镜像从 120MB 砍到 ~10MB 级。SQLite 自带,
 #   不需要 libsqlite3, 也不要求特定 glibc 版本。
 #
-# ⚠️ DNS 警告(仅影响聊天出域, CRM 核心不受影响):
-#   lume 是 C 写的, 静态 glibc 二进制的 DNS 解析靠运行时 dlopen libnss_*.so,
-#   alpine(musl) 不提供这些文件 → /react/api/chat 调外部 LLM 网关(如
-#   host.docker.internal 这类主机名)会 "Temporary failure in name resolution"。
-#   规避二选一:(a) 网关用数字 IP(如 http://172.17.0.1:<port>), 无需 DNS 解析;
-#   (b) 把 FROM 换成 debian:bookworm-slim(自带 glibc NSS, DNS 正常, 但镜像回 ~80MB)。
-#   CRM 核心(SQLite + SPA + REST API)完全本地、不解析域名, 不受此影响;
-#   LLM_API_URL 留空(离线演示引擎)亦不受影响。
+# DNS 说明(实测厘清, 修正早期"alpine DNS 坑"的过虑):
+#   lume 的 LLM 调用是 fork + execlp 系统里的 curl(agent-httpd/src/agent/agent.c),
+#   DNS 由 alpine 自带 musl curl 解析(走 Docker 内嵌 DNS), host.docker.internal
+#   等主机名正常可用 —— lume-invest 同款部署(容器内调 host.docker.internal:<port>
+#   的 本机 LLM 网关)已实测跑通。lume 本体不解析域名; 只有当 lume 自身需要出域解析时
+#   (静态 glibc 二进制缺 libnss_*.so)才需数字 IP 或 debian 基底。
+#   curl 是真实 LLM 的硬依赖(alpine 基础镜像不带, 必须显式安装)。
 #
 # 前端: www/ 是宿主 make ui 产出的纯静态单页, 直接 COPY, 容器里不重编。
 # 鉴权: server{} 的 htpasswd = env("HTPASSWD_FILE"); 本地留空=无认证。公网部署
@@ -33,7 +32,7 @@ RUN curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh \
 
 # ---- 运行时(alpine, 极小) ----
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates openssl
+RUN apk add --no-cache ca-certificates curl openssl
 COPY --from=fetch /usr/local/bin/lume /usr/local/bin/lume
 
 WORKDIR /app

@@ -61,13 +61,12 @@ make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停
 可换 alpine,镜像从 120MB 砍到 ~10MB 级。前端 `www/` 是宿主 `make ui` 产出的纯
 静态包,直接 COPY。
 
-> ⚠️ DNS 坑(仅影响聊天出域, CRM 核心无影响):lume 是 C 写的,静态 glibc 二进制
-> 的 DNS 解析靠运行时 `dlopen` `libnss_*.so`,alpine(musl) 不提供 → `/react/api/chat`
-> 调外部 LLM 网关(如 `host.docker.internal` 主机名)会 "Temporary failure in name
-> resolution"。规避二选一:① 网关用数字 IP(如 `http://172.17.0.1:<port>`)无需 DNS;
-> ② 把 `FROM alpine:3.20` 改为 `debian:bookworm-slim`(自带 glibc NSS, DNS 正常,
-> 但镜像回到 ~80MB)。SQLite + SPA + REST API 全本地、不解析域名,LLM_API_URL 留空
-> (离线演示)亦不受影响,故公网 demo 用 alpine 无碍。
+> DNS/出域说明(实测厘清):lume 的 LLM 调用是 fork + execlp 系统里的 `curl`
+> (`agent-httpd/src/agent/agent.c`),DNS 由 alpine 自带 musl curl 解析(走 Docker
+> 内嵌 DNS),`host.docker.internal` 等主机名正常可用——lume-invest 同款部署(容器
+> 内调 host.docker.internal:<port> 的网关)已实证跑通。`curl` 是真实 LLM 的硬依赖
+> (alpine 基础镜像不带,镜像里已显式安装)。lume 本体不解析域名;CRM 核心(SQLite +
+> SPA + REST API)完全本地,离线演示亦不受影响。
 
 ```bash
 make ui                   # 先构建前端(产出 www/app.js)
@@ -78,6 +77,10 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 
 - `crm.lume` 的 `bind` 默认 `127.0.0.1`,容器内需 `LUME_BIND=0.0.0.0` 才能被
   `-p` 端口映射命中;本地开发仍是安全的回环绑定(见 `server{}`)。
+- **容器内真实 LLM(已接好)**:compose 已注入 `LLM_API_URL`(本机 本机 LLM 网关 网关
+  `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;key 不入库
+  ——放同目录 `.env`(gitignored) 一行 `LLM_API_KEY=...`,compose 经
+  `${LLM_API_KEY}` 变量替换注入。不配 key 则聊天回落离线演示引擎。
 - **公网鉴权(重要)**:`server{ htpasswd = env("HTPASSWD_FILE") }` 已接好,但
   经实测 lume 发布版二进制**只对内置路由强制 Basic Auth,自定义 `/api/*` 不挡**
   —— 而 CRM 的接口全是自定义路由、聊天工具还能读写 `.data/crm.db`。所以公网
