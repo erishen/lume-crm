@@ -84,6 +84,11 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 - **SSR 客户分享页**:`GET /share/customer?id=<n>` 纯服务端渲染(el/html 组件,
   零 JavaScript,自包含 CSS),可直接外发链接展示单个客户全档(商机/跟进)。
   客户字段全部经 `html()` 标量槽输出——自动转义,存储型 XSS 不可行(有实测)。
+  > **C SSR vs React SSR**:lume 另支持 React SSR——`server{ react_socket }` 把
+  > `/react/*` FastCGI relay 到常驻 node 进程(react-dom/server + StaticRouter +
+  > hydration),见 `examples/react-ssr.lume`。本 CRM **刻意不用**它:接 node 常驻
+  > 进程会破坏「14.3MB 单二进制、无 Node 运行时」的核心卖点,业务页用框架内建的
+  > C SSR(零 JS 零依赖)即可;React SSR 适合内容型/重交互页面(官网、文档站)。
 - **发现页**:`GET /discovery` 返回框架内省目录(readonly 标志 + tools/skills/mcps)。
   只读模式下工具清单恰好 4 个(2 查询 DSL 工具 + calc + get_time)——安全故事在
   页面上自证;容器 entrypoint 在只读模式同步收敛 `HARNESS_TOOLS_ALLOW`,
