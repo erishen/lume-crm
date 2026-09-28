@@ -81,12 +81,17 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;key 不入库
   ——放同目录 `.env`(gitignored) 一行 `LLM_API_KEY=...`,compose 经
   `${LLM_API_KEY}` 变量替换注入。不配 key 则聊天回落离线演示引擎。
-- **公网鉴权(重要)**:`server{ htpasswd = env("HTPASSWD_FILE") }` 已接好,但
-  经实测 lume 发布版二进制**只对内置路由强制 Basic Auth,自定义 `/api/*` 不挡**
-  —— 而 CRM 的接口全是自定义路由、聊天工具还能读写 `.data/crm.db`。所以公网
-  部署**必须在反向代理层(nginx/caddy)做 Basic Auth + TLS**,不能只靠 lume 内置
-  鉴权。`deploy/nginx-lume-crm.conf` 是直接可用的反代模板(全员 Basic Auth)。
-  容器内仍可用 `LUME_AUTH_PASSWORD` 生成 `$6$` 哈希作纵深防御。
+- **公网鉴权(实测厘清)**:lume 的 Basic Auth 门是**全局的**——自定义 `/api/*`
+  与内置路由同一道前置门(`http.c`/`event.c` 在路由分发前校验),无/错凭据一律
+  401(fail-closed)。容器设 `LUME_AUTH_USER` + `LUME_AUTH_PASSWORD`,entrypoint
+  现场生成 `$6$` htpasswd 并**导出 `HTPASSWD_FILE`**(`crm.lume` 的
+  `env("HTPASSWD_FILE")` 靠它取路径——此前"不挡 /api/*"的结论是误诊,真因是
+  entrypoint 忘了 export,鉴权整个静默关闭)。反向代理层仍建议:TLS 必须,
+  Basic Auth 可作纵深防御(`deploy/nginx-lume-crm.conf` 模板保留)。
+- **哈希格式平台差异(本地调试必读)**:`$5$/$6$` 走系统 libcrypt——Linux 容器
+  (glibc)正常;**macOS libcrypt 只有 DES**,`$6$` 条目在 mac 本地永远拒绝
+  (lume 启动时会打警告)。macOS 本地测试请用 bcrypt:`htpasswd -bnB user pass`
+  (lume 自带可移植 bcrypt 校验器,全平台一致)。
 - **`.env` 配置机制(易踩坑,说清)**:镜像**不含** `.env`
   (`.dockerignore` 排除,Dockerfile 只 `COPY .env.example`),所以 lume 的
   `fopen(".env")` 在容器内找不到文件直接返回,**本地网关 key 不会泄漏进容器**。
