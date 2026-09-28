@@ -1,39 +1,40 @@
 # syntax=docker/dockerfile:1
 # ============================================================================
-# lume-crm —— 单镜像 CRM 应用 (lume 单二进制 + 预编译前端 + 原生 SQLite)。
+# lume-crm —— 单镜像 CRM 应用 (lume 静态单二进制 + 预编译前端 + 原生 SQLite)。
 #
-# 为什么不从源码重编 lume:
-#   官方 install.sh 直接拉对应平台的预编译二进制(release 通道, 与本地开发
-#   同一份 v0.5.0), 省掉 agent-httpd 静态链那套重活。发布版 lume 动态链
-#   libsqlite3 —— 镜像里必须装 libsqlite3-0, 否则原生 SQLite
-#   (sql_query/sql_write) 在容器里起不来。
+# 瘦身来源: lume v0.5.1 起提供 *-static 预编译二进制(install.sh 传 LUME_STATIC=1
+#   拉取)。该二进制把 libsqlite3 + 全部 libc 烤进自身, **零运行时依赖**, 故基底
+#   可换 alpine(而非 debian/ubuntu), 镜像从 120MB 砍到 ~10MB 级。SQLite 自带,
+#   不需要 libsqlite3, 也不要求特定 glibc 版本。
 #
-# 基础镜像: 发布版二进制在 CI(ubuntu-latest)上编出, 要求 GLIBC_2.38;
-#   debian:bookworm 只有 glibc 2.36 会启动即崩。debian:trixie-slim 提供
-#   glibc 2.41(≥2.38 满足), 且基底比 ubuntu:24.04 瘦约一半, 故用它。
+# ⚠️ DNS 警告(仅影响聊天出域, CRM 核心不受影响):
+#   lume 是 C 写的, 静态 glibc 二进制的 DNS 解析靠运行时 dlopen libnss_*.so,
+#   alpine(musl) 不提供这些文件 → /react/api/chat 调外部 LLM 网关(如
+#   host.docker.internal 这类主机名)会 "Temporary failure in name resolution"。
+#   规避二选一:(a) 网关用数字 IP(如 http://172.17.0.1:<port>), 无需 DNS 解析;
+#   (b) 把 FROM 换成 debian:bookworm-slim(自带 glibc NSS, DNS 正常, 但镜像回 ~80MB)。
+#   CRM 核心(SQLite + SPA + REST API)完全本地、不解析域名, 不受此影响;
+#   LLM_API_URL 留空(离线演示引擎)亦不受影响。
 #
-# 前端: www/ 是 esbuild 产出的纯静态单页(平台无关), 直接 COPY 宿主已构建的
-#   www/(make ui 产出), 容器里不重编前端。
-#
-# 鉴权: server{} 的 htpasswd = env("HTPASSWD_FILE"); 本地留空=无认证。公网
-#   部署必须在 compose/docker run 里注入 LUME_AUTH_PASSWORD(容器启动由
-#   docker-entrypoint.sh 现场生成 /app/auth/htpasswd 的 bcrypt 强哈希)并设
-#   HTPASSWD_FILE=/app/auth/htpasswd。无凭据=认证关闭 —— 切勿裸暴露公网。
-#
+# 前端: www/ 是宿主 make ui 产出的纯静态单页, 直接 COPY, 容器里不重编。
+# 鉴权: server{} 的 htpasswd = env("HTPASSWD_FILE"); 本地留空=无认证。公网部署
+#   必须在反向代理层(nginx/caddy)做 Basic Auth + TLS —— lume 发布版只对内置路由
+#   强制鉴权, 自定义 /api/* 不挡。容器内仍可用 LUME_AUTH_PASSWORD 生成 $6$ 哈希
+#   作纵深防御。
 # bind: 本地 127.0.0.1; 容器传 LUME_BIND=0.0.0.0 才能被 -p 端口映射命中。
 # ============================================================================
 
-FROM debian:trixie-slim
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates curl libsqlite3-0 openssl \
-    && rm -rf /var/lib/apt/lists/*
-
-# 官方安装器: 拉 Linux 预编译 lume 到 /usr/local/bin/lume(并带 www/examples/
-# docs 到 /usr/local/share/lume, 本应用用不到但无害)。固定版本与本地一致。
+# ---- 拉静态二进制(builder, 用完即弃) ----
+FROM alpine:3.20 AS fetch
+RUN apk add --no-cache ca-certificates curl tar
+ARG LUME_VERSION=v0.5.1
 RUN curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh \
-    | LUME_VERSION=v0.5.0 LUME_PREFIX=/usr/local sh
+    | LUME_VERSION=${LUME_VERSION} LUME_STATIC=1 LUME_PREFIX=/usr/local sh
+
+# ---- 运行时(alpine, 极小) ----
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates openssl
+COPY --from=fetch /usr/local/bin/lume /usr/local/bin/lume
 
 WORKDIR /app
 

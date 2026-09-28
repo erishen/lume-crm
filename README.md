@@ -48,17 +48,26 @@ make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停
 
 依赖:Lume 用 **release 版本**(不再依赖源码树 `../lume`)。安装:
 `curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh | sh`
-(二进制落在 `~/.local/bin/lume`;CRM 用到的 DSL 特性需 `lume >= v0.5.0`,安装时
-建议固定版本 `LUME_VERSION=v0.5.0 sh install.sh`)。前端 esbuild 优先用本目录
+(二进制落在 `~/.local/bin/lume`;CRM 用到的 DSL 特性需 `lume >= v0.5.1`,安装时
+建议固定版本 `LUME_VERSION=v0.5.1 sh install.sh`)。前端 esbuild 优先用本目录
 `npm install` 后的 `./node_modules/.bin/esbuild`,其次 PATH,最后兜底
 `../lume/frontend/node_modules`(过渡);React 同样由 node_modules 解析。
 
 ## Docker
 
-镜像基于 `ubuntu:24.04`:发布版 lume 二进制在 CI(ubuntu-latest)编出,要求
-`GLIBC_2.38`,`debian:bookworm` 的 glibc 2.36 会让 lume 启动即崩;发布版又
-动态链 `libsqlite3`,故镜像装了 `libsqlite3-0`。容器内用官方 `install.sh` 拉
-Linux 二进制,前端 `www/` 是宿主 `make ui` 产出的纯静态包,直接 COPY。
+镜像基于 `alpine:3.20`:自 lume **v0.5.1** 起官方提供 `*-static` 预编译二进制
+(`install.sh` 传 `LUME_STATIC=1` 拉取),该二进制把 libsqlite3 + 全部 libc 烤进
+自身,**零运行时依赖**——故镜像无需 `libsqlite3-0`、不要求特定 glibc 版本,基底
+可换 alpine,镜像从 120MB 砍到 ~10MB 级。前端 `www/` 是宿主 `make ui` 产出的纯
+静态包,直接 COPY。
+
+> ⚠️ DNS 坑(仅影响聊天出域, CRM 核心无影响):lume 是 C 写的,静态 glibc 二进制
+> 的 DNS 解析靠运行时 `dlopen` `libnss_*.so`,alpine(musl) 不提供 → `/react/api/chat`
+> 调外部 LLM 网关(如 `host.docker.internal` 主机名)会 "Temporary failure in name
+> resolution"。规避二选一:① 网关用数字 IP(如 `http://172.17.0.1:<port>`)无需 DNS;
+> ② 把 `FROM alpine:3.20` 改为 `debian:bookworm-slim`(自带 glibc NSS, DNS 正常,
+> 但镜像回到 ~80MB)。SQLite + SPA + REST API 全本地、不解析域名,LLM_API_URL 留空
+> (离线演示)亦不受影响,故公网 demo 用 alpine 无碍。
 
 ```bash
 make ui                   # 先构建前端(产出 www/app.js)
