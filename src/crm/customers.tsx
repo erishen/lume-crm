@@ -310,6 +310,15 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
             {d.company || "—"} · {d.email || "—"} · {d.phone || "—"} · 加入 {d.created_fmt}
           </p>
           <div className="row-actions">
+            <a
+              className="btn ghost"
+              href={"/share/customer?id=" + id}
+              target="_blank"
+              rel="noreferrer"
+              title="打开 SSR 分享页(零 JS,可外发链接)"
+            >
+              分享页
+            </a>
             <button className="btn ghost" onClick={startEdit}>
               编辑资料
             </button>
