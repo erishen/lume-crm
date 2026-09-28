@@ -6,5 +6,6 @@
   "scripts": {
     "build": "esbuild src/crm/app.tsx --bundle --minify --format=esm --splitting --jsx=automatic --outdir=www --outbase=src/crm",
     "dev": "esbuild src/crm/app.tsx --bundle --format=esm --splitting --jsx=automatic --outdir=www --outbase=src/crm --watch --serve=0"
-  }
+  },
+  "license": "MIT"
 }

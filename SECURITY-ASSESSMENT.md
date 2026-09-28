@@ -61,7 +61,7 @@
 
 ### 🟡 P1-3：LLM token 成本攻击
 
-聊天端点转发到 本机 LLM 网关 真模型，无速率限制。开鉴权后口令一旦外泄（演示场景
+聊天端点转发到本机 LLM 网关真模型，无速率限制。开鉴权后口令一旦外泄（演示场景
 几乎必然），可无限刷 `/react/api/chat` 烧 token。缓解：nginx `limit_req` +
 SSE 连接数/超时限制 + 网关侧按 key 限流。
 
@@ -88,7 +88,7 @@ SSE 连接数/超时限制 + 网关侧按 key 限流。
        `limit_req` + `limit_conn` + `client_max_body_size 64k` + SSE 超时。
 3. [x] 公网实例处置删除类工具：**已落地** `LUME_CRM_READONLY=1`（compose 默认开），
        只读+注入 A/B 实测通过。
-4. [ ] 网关侧给 demo key 设限流/额度（本机 LLM 网关 按 key 限额）。
+4. [ ] 网关侧给 demo key 设限流/额度（网关按 key 限额）。
 5. [ ] 上线后看一眼 nginx access log 确认无异常扫描成功项。
 
 ## 演练环境说明

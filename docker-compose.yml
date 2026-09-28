@@ -14,10 +14,10 @@ services:
       LUME_BIND: "0.0.0.0"     # 容器内需 0.0.0.0 才能被端口映射命中
       # ---- 真实 LLM(OpenAI 兼容; 不配 LLM_API_KEY 则聊天走离线演示引擎) ----
       # key 不写这里(会入库): 放同目录 .env(gitignored), compose 用 ${LLM_API_KEY}
-      # 变量替换注入。URL 指向本机 本机 LLM 网关 网关; host.docker.internal 由 musl curl
+      # 变量替换注入。URL 指向本机 LLM 网关; host.docker.internal 由 musl curl
       # 解析, alpine 下可用(实测 lume-invest 同款部署跑通)。
-      LLM_API_URL: "http://host.docker.internal:<port>/v1/chat/completions"
-      LLM_MODEL: "auto"
+      LLM_API_URL: "${LLM_API_URL:-http://host.docker.internal:<port>/v1/chat/completions}"
+      LLM_MODEL: "${LLM_MODEL:-auto}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
       # ---- 只读演示模式(公网推荐, 默认开) ----
       # 写 API 全部 403 + Agent 只注册查询类工具(注入也无破坏面), 无鉴权也可公网演示。
