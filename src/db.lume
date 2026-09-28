@@ -16,6 +16,11 @@
 let crm_db = ".data/crm.db";
 let crm_lock_path = ".data/.crm.lock";   // 不能与 crm_lock() 同名
 
+// 公网只读演示开关:LUME_CRM_READONLY=1 时只注册查询类聊天工具(搜索/详情),
+// 增删改工具不进注册表 —— 提示注入再狠也没有可调用的破坏面。HTTP 写路由在
+// crm.lume 用同一开关 403。默认不设 = 完全可写(本地/开发)。
+let crm_readonly = env("LUME_CRM_READONLY") == "1";
+
 // ------------------------------------------------ 业务字典(单一事实源)
 // 阶段白名单:服务端强制(add/update_deal 校验),前端选项经 /api/meta 下发,
 // 不靠前端自觉。新增阶段只改这里一处。
@@ -534,37 +539,42 @@ tool "crm_get_customer", "取单个客户全档(基础信息 + 名下所有商�
   return c;
 };
 
-tool "crm_add_customer", "新建客户。name 必填;company/email/phone 可空(空串占位)。", { name: string, company: string, email: string, phone: string }, (arg) => {
-  return add_customer(arg.name, arg.company, arg.email, arg.phone);
-};
+// 只读模式下跳过注册:下面 8 个增删改工具整体不进注册表,
+// Agent 的工具清单里压根不存在,注入也无法调用。
+if (not crm_readonly) {
+  tool "crm_add_customer", "新建客户。name 必填;company/email/phone 可空(空串占位)。", { name: string, company: string, email: string, phone: string }, (arg) => {
+    return add_customer(arg.name, arg.company, arg.email, arg.phone);
+  };
 
-tool "crm_update_customer", "改客户资料(公司/邮箱/电话/姓名)。customer_id 必须已存在;空串字段不改。", { customer_id: int, name: string, company: string, email: string, phone: string }, (arg) => {
-  return update_customer(arg.customer_id, arg.name, arg.company, arg.email, arg.phone);
-};
+  tool "crm_update_customer", "改客户资料(公司/邮箱/电话/姓名)。customer_id 必须已存在;空串字段不改。", { customer_id: int, name: string, company: string, email: string, phone: string }, (arg) => {
+    return update_customer(arg.customer_id, arg.name, arg.company, arg.email, arg.phone);
+  };
 
-tool "crm_delete_customer", "删除客户并级联清掉其名下全部商机与跟进记录。customer_id 必须已存在;操作不可撤销。", { customer_id: int }, (arg) => {
-  return delete_customer(arg.customer_id);
-};
+  tool "crm_delete_customer", "删除客户并级联清掉其名下全部商机与跟进记录。customer_id 必须已存在;操作不可撤销。", { customer_id: int }, (arg) => {
+    return delete_customer(arg.customer_id);
+  };
 
-tool "crm_add_deal", "给某客户挂一条商机。customer_id 必须已存在;stage 建议用 初步接洽/方案/谈判/成交/丢单,空串默认 初步接洽。", { customer_id: int, title: string, stage: string, amount: float }, (arg) => {
-  return add_deal(arg.customer_id, arg.title, arg.stage, arg.amount);
-};
+  tool "crm_add_deal", "给某客户挂一条商机。customer_id 必须已存在;stage 建议用 初步接洽/方案/谈判/成交/丢单,空串默认 初步接洽。", { customer_id: int, title: string, stage: string, amount: float }, (arg) => {
+    return add_deal(arg.customer_id, arg.title, arg.stage, arg.amount);
+  };
 
-tool "crm_update_deal", "改一条商机的阶段/金额/标题(推进管道用,如 谈判→成交)。deal_id 必须已存在;空串/零值字段不改。", { deal_id: int, stage: string, amount: float, title: string }, (arg) => {
-  return update_deal(arg.deal_id, arg.stage, arg.title, arg.amount);
-};
+  tool "crm_update_deal", "改一条商机的阶段/金额/标题(推进管道用,如 谈判→成交)。deal_id 必须已存在;空串/零值字段不改。", { deal_id: int, stage: string, amount: float, title: string }, (arg) => {
+    return update_deal(arg.deal_id, arg.stage, arg.title, arg.amount);
+  };
 
-tool "crm_add_activity", "给客户记一条跟进(电话/会议/邮件/拜访…),note 必填;kind 空串默认 记录。", { customer_id: int, kind: string, note: string }, (arg) => {
-  return add_activity(arg.customer_id, arg.kind, arg.note);
-};
+  tool "crm_add_activity", "给客户记一条跟进(电话/会议/邮件/拜访…),note 必填;kind 空串默认 记录。", { customer_id: int, kind: string, note: string }, (arg) => {
+    return add_activity(arg.customer_id, arg.kind, arg.note);
+  };
 
-tool "crm_delete_deal", "删一条商机(误挂/重复录入)。deal_id 必须已存在;删后不再计入管道统计。", { deal_id: int }, (arg) => {
-  return delete_deal(arg.deal_id);
-};
+  tool "crm_delete_deal", "删一条商机(误挂/重复录入)。deal_id 必须已存在;删后不再计入管道统计。", { deal_id: int }, (arg) => {
+    return delete_deal(arg.deal_id);
+  };
 
-tool "crm_delete_activity", "删一条跟进记录(误记/作废)。activity_id 必须已存在。", { activity_id: int }, (arg) => {
-  return delete_activity(arg.activity_id);
-};
+  tool "crm_delete_activity", "删一条跟进记录(误记/作废)。activity_id 必须已存在。", { activity_id: int }, (arg) => {
+    return delete_activity(arg.activity_id);
+  };
+}
+
 
 // 模块 import 即执行:main 进程初始化库(建表+种子),fork 的 worker 继承。
 // 幂等——表/种子都在,重复启动不重复灌。放在文件末尾:此时 q()/sql_* 助手

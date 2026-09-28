@@ -81,6 +81,12 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;key 不入库
   ——放同目录 `.env`(gitignored) 一行 `LLM_API_KEY=...`,compose 经
   `${LLM_API_KEY}` 变量替换注入。不配 key 则聊天回落离线演示引擎。
+- **只读演示模式(公网推荐, compose 默认开)**:`LUME_CRM_READONLY=1` 时全部写 API
+  统一 403,且 Agent **只注册查询类工具**(8 个增删改工具不进注册表)——提示注入
+  再狠也没有可调用的破坏面,故**无需鉴权即可安全公网演示**:访客能看全部数据、
+  能跟真模型聊天,但玩不坏。已实测 A/B:可写+注入"删除客户"→ 真删;只读+同款
+  注入 → Agent 无删除工具可调,数据完好。本地开发不设该变量 = 完全可写。
+  评估详见 `SECURITY-ASSESSMENT.md`。
 - **公网鉴权(实测厘清)**:lume 的 Basic Auth 门是**全局的**——自定义 `/api/*`
   与内置路由同一道前置门(`http.c`/`event.c` 在路由分发前校验),无/错凭据一律
   401(fail-closed)。容器设 `LUME_AUTH_USER` + `LUME_AUTH_PASSWORD`,entrypoint

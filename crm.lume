@@ -34,6 +34,17 @@ server {
   htpasswd = env("HTPASSWD_FILE");
 };
 
+// 只读演示开关:LUME_CRM_READONLY=1 时全部写路由 403(公网演示无鉴权也玩不坏;
+// 本地/开发不设该变量 = 完全可写)。Agent 工具面在 src/db.lume 同步收敛。
+let crm_readonly = env("LUME_CRM_READONLY") == "1";
+
+func write_gate() {
+  if (crm_readonly) {
+    return { status: 403, body: { err: "演示模式为只读(LUME_CRM_READONLY=1),写操作已禁用" } };
+  }
+  return null;
+}
+
 // 领域层:SQLite 助手 + crm_* 聊天工具(import 时建库/灌种子,tool 顶层注册)
 import "src/db.lume" as crmdb;
 
@@ -87,6 +98,8 @@ get "/api/customer", (req) => {
 
 // ------------------------------------------------ 写路径(助手里 flock 串行)
 post "/api/customers", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -99,6 +112,8 @@ post "/api/customers", (req) => {
 };
 
 post "/api/deals", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -112,6 +127,8 @@ post "/api/deals", (req) => {
 
 // 推进管道:改某条商机的阶段/金额/标题(空串/零值 = 不改该字段)
 post "/api/deals/update", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -124,6 +141,8 @@ post "/api/deals/update", (req) => {
 };
 
 post "/api/activities", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -136,6 +155,8 @@ post "/api/activities", (req) => {
 
 // 改客户资料(空串/空值 = 不改该字段;name 非空才覆盖)
 post "/api/customers/update", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -150,6 +171,8 @@ post "/api/customers/update", (req) => {
 
 // 删除客户(级联清掉其名下商机/跟进)
 post "/api/customers/delete", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -159,6 +182,8 @@ post "/api/customers/delete", (req) => {
 
 // 删一条商机
 post "/api/deals/delete", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
@@ -168,6 +193,8 @@ post "/api/deals/delete", (req) => {
 
 // 删一条跟进
 post "/api/activities/delete", (req) => {
+  let gate = write_gate();
+  if (gate != null) { return gate; }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
