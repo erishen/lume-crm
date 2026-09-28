@@ -84,8 +84,25 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   部署**必须在反向代理层(nginx/caddy)做 Basic Auth + TLS**,不能只靠 lume 内置
   鉴权。`deploy/nginx-lume-crm.conf` 是直接可用的反代模板(全员 Basic Auth)。
   容器内仍可用 `LUME_AUTH_PASSWORD` 生成 `$6$` 哈希作纵深防御。
-- `.env`(含本地网关 key)不进镜像;生产若要容器内真实 LLM,挂一份含可达
-  `LLM_API_URL` 的 `.env` 并设 `LLM_API_URL` 环境变量即可(默认离线演示)。
+- **`.env` 配置机制(易踩坑,说清)**:镜像**不含** `.env`
+  (`.dockerignore` 排除,Dockerfile 只 `COPY .env.example`),所以 lume 的
+  `fopen(".env")` 在容器内找不到文件直接返回,**本地网关 key 不会泄漏进容器**。
+  但 lume 框架**内置 `.env` 自动加载器**(`agent-httpd/src/agent/llm.c:287`):启动
+  时会 `fopen(".env")` 打开 CWD 的 `.env`(容器 CWD=`/app`),把 `KEY=VALUE` 以
+  `setenv(s,val,0)` 注入进程环境——**`override=0`,即不覆盖已存在的进程 env**。
+  因此容器内配置优先级为:
+
+  | 配置方式 | 是否生效 | 优先级 |
+  |---|---|---|
+  | `docker run -e LLM_API_URL=... -e LLM_API_KEY=...` | ✅ 直接进进程 env | **最高**(`.env` 不覆盖) |
+  | compose `environment:` | ✅ | 最高 |
+  | 挂载文件 `-v ./prod.env:/app/.env`(或 compose `volumes:`) | ✅ lume 自动 `fopen` 加载 | 低于 `-e` |
+  | 啥都不传 | ❌ 全靠框架默认 | 聊天=离线演示 |
+
+  - `.env.example` 是**惰性**的:lume 只认字面 `".env"`,不认 `.env.example`,镜像里无害。
+  - `LUME_BIND` / `LUME_AUTH_PASSWORD` 同样走 `-e` 或挂载的 `/app/.env`。
+  - 想让容器内聊天走真实 LLM:二选一即可——`docker run -e LLM_API_URL=...`
+    (优先级更高),或挂一份生产 `.env` 到 `/app/.env`(lume 自己加载)。
 
 ## 布局
 
