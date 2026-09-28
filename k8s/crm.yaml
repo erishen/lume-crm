@@ -1,0 +1,85 @@
+# lume-crm 应用（本地 k3s 闭环）。与 lume-invest 同模式：
+# 平台 Pipeline 会把最新构建的 crm-ui:<tag> 镜像 kubectl set-image 覆盖，
+# 镜像用 crm-ui:local 占位 + IfNotPresent（纯本地，绝不外网 pull；
+# OrbStack 的 k3s 自动共享 docker 镜像，无需 ctr import）。
+#
+# 只读演示模式（LUME_CRM_READONLY=1）：写 API 全部 403 + Agent 只注册查询
+# 工具，无需鉴权即可对外演示；因此这里不配 LUME_AUTH_* / htpasswd。
+# 若要切换可写模式：改 env 并配套 kubectl create secret generic
+# lume-crm-auth --from-literal=password=<强密码>，entrypoint 会现场生成 htpasswd。
+#
+# LLM 上游：k3s Pod 内 host.docker.internal 已解析到宿主网关（lume-invest
+# 同款实测可达），key 走 Secret（先建：kubectl create secret generic
+# lume-crm-llm --from-literal=apikey=<网关签发的 key>，勿明文入 yaml）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lume-crm
+  labels:
+    app: lume-crm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lume-crm
+  template:
+    metadata:
+      labels:
+        app: lume-crm
+    spec:
+      containers:
+        - name: lume-crm
+          # 镜像 CMD 即 /usr/local/bin/lume crm.lume，ENTRYPOINT 为
+          # docker-entrypoint.sh（负责 LUME_AUTH_PASSWORD 场景的 htpasswd
+          # 生成与 HARNESS_TOOLS_ALLOW 收敛），k8s 侧无需覆盖。
+          image: crm-ui:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8089
+          env:
+            # k8s pod 需监听所有接口（NodePort 从 pod 网络栈访问 pod IP）；
+            # 暴露面由 NodePort 本地绑定控制。
+            - name: LUME_BIND
+              value: "0.0.0.0"
+            # 只读演示模式（默认开）：8 个写路由 403 + Agent 仅 2 个查询工具。
+            - name: LUME_CRM_READONLY
+              value: "1"
+            - name: LLM_API_URL
+              value: "http://host.docker.internal:<port>/v1/chat/completions"
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lume-crm-llm
+                  key: apikey
+            - name: LLM_MODEL
+              value: "auto"
+          # SQLite 落 /app/.data；演示场景 emptyDir 即可（Pod 重建后由
+          # src/db.lume 重新建库 + 种子）。要持久化换 hostPath/PVC。
+          volumeMounts:
+            - name: data
+              mountPath: /app/.data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lume-crm
+  # 必须带 app=<部署名> 标签：平台服务探测按 Service 自身标签查找可达地址
+  labels:
+    app: lume-crm
+spec:
+  type: NodePort
+  selector:
+    app: lume-crm
+  ports:
+    - port: 8089
+      targetPort: 8089
