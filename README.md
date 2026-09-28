@@ -81,6 +81,13 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;key 不入库
   ——放同目录 `.env`(gitignored) 一行 `LLM_API_KEY=...`,compose 经
   `${LLM_API_KEY}` 变量替换注入。不配 key 则聊天回落离线演示引擎。
+- **SSR 客户分享页**:`GET /share/customer?id=<n>` 纯服务端渲染(el/html 组件,
+  零 JavaScript,自包含 CSS),可直接外发链接展示单个客户全档(商机/跟进)。
+  客户字段全部经 `html()` 标量槽输出——自动转义,存储型 XSS 不可行(有实测)。
+- **发现页**:`GET /discovery` 返回框架内省目录(readonly 标志 + tools/skills/mcps)。
+  只读模式下工具清单恰好 4 个(2 查询 DSL 工具 + calc + get_time)——安全故事在
+  页面上自证;容器 entrypoint 在只读模式同步收敛 `HARNESS_TOOLS_ALLOW`,
+  砍掉 read_file/fetch_url 等原生工具,聊天 Agent 无读文件/外联通道。
 - **只读演示模式(公网推荐, compose 默认开)**:`LUME_CRM_READONLY=1` 时全部写 API
   统一 403,且 Agent **只注册查询类工具**(8 个增删改工具不进注册表)——提示注入
   再狠也没有可调用的破坏面,故**无需鉴权即可安全公网演示**:访客能看全部数据、

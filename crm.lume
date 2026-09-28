@@ -10,6 +10,8 @@
 //   POST /api/deals                 新建商机
 //   POST /api/deals/update          改商机阶段/金额/标题(空字段=不改)
 //   POST /api/activities           新增跟进
+//   GET  /share/customer?id=<n>    客户分享页(SSR 纯服务端渲染,零 JS,可外发)
+//   GET  /discovery                框架内省:tools/skills/mcps 目录(JSON)
 //   POST /react/api/chat           Agent SSE(框架原生,聊天页用)
 //
 // 数据层:SQLite(.data/crm.db)。路由只管 body 解析 + 调助手;
@@ -47,6 +49,9 @@ func write_gate() {
 
 // 领域层:SQLite 助手 + crm_* 聊天工具(import 时建库/灌种子,tool 顶层注册)
 import "src/db.lume" as crmdb;
+
+// SSR 组件库:客户分享页(纯函数组件,客户字段走 html() 标量槽自动转义)
+import "src/share.lume" as crmshare;
 
 // body 解析糖:返回固定两键 { ok, err }(和 try 一样),路由侧 b.ok / b.err
 // 成员访问安全。ok 是解析出的 body map(失败为 null),err 是错误消息(成功 null)。
@@ -200,6 +205,30 @@ post "/api/activities/delete", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.delete_activity(int(get(b.ok, "activity_id", 0))), false);
+};
+
+// ------------------------------------------------ SSR:对外分享(只读,GET-only)
+// 客户分享页:纯服务端渲染(el/html 组件,零 JS),可直接外发链接。
+// 数据走已有的只读助手 customer_by_id;404 与 API 同款语义。
+get "/share/customer", (req) => {
+  let id = int(get(req.query_params, "id", 0));
+  let c = crmdb.customer_by_id(id);
+  if (c == null) {
+    return { status: 404, body: { err: "客户 " + str(id) + " 不存在" } };
+  }
+  return crmshare.share_page(c);
+};
+
+// 发现页:框架内省目录(与 examples/demo.lume 同款口径)。tools() 反映真实
+// 注册表——只读模式下只有 2 个查询工具,安全故事在页面上自证。
+get "/discovery", (req) => {
+  return {
+    app: "lume-crm",
+    readonly: crm_readonly,
+    tools: tools(),
+    skills: skills(),
+    mcps: mcps(),
+  };
 };
 
 // 业务字典(阶段白名单/跟进类型):前端选项的单一事实源

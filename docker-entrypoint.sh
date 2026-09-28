@@ -21,4 +21,12 @@ if [ -n "${LUME_AUTH_PASSWORD:-}" ]; then
     export HTPASSWD_FILE="${HTPASSWD_FILE:-/app/auth/htpasswd}"
 fi
 
+# 只读演示模式: Agent 工具白名单收敛。注意 HARNESS_TOOLS_ALLOW 同时过滤
+# 原生内建(read_file/fetch_url/skill-run…)与 DSL tool —— 白名单必须带上
+# 只读模式下仍注册的 2 个查询工具, 否则聊天一个工具都没有。
+# 效果: 聊天 Agent 无读文件/外联 URL 能力, 注入也拿不到数据外带通道。
+if [ "${LUME_CRM_READONLY:-0}" = "1" ]; then
+    export HARNESS_TOOLS_ALLOW="crm_search_customers,crm_get_customer,calc,get_time"
+fi
+
 exec "$@"

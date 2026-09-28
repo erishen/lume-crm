@@ -50,6 +50,15 @@
 2. 要可写演示（如给特定人试用写功能）：再叠加 Basic Auth（compose 注释块已备好）。
 3. 长期：lume 框架层给 tool 加"需确认"标记（破坏性工具二段确认），反哺框架。
 
+### 🟡 P1-2b（评估后补）：原生 Agent 工具是隐性外带通道——已收敛
+
+`/discovery` 实测暴露：默认注册表含 `read_file`/`fetch_url` 等原生工具——聊天
+注入可让 Agent 读容器内文件或向外部 URL 外带 DB 数据（只读模式砍掉 DSL 写工具
+后这是残余通道）。**已修**：只读模式下 entrypoint 设
+`HARNESS_TOOLS_ALLOW=crm_search_customers,crm_get_customer,calc,get_time`
+（该白名单同时过滤原生与 DSL 工具），实测 read_file 注入探针不再有任何
+文件/外联工具可调。
+
 ### 🟡 P1-3：LLM token 成本攻击
 
 聊天端点转发到 本机 LLM 网关 真模型，无速率限制。开鉴权后口令一旦外泄（演示场景
