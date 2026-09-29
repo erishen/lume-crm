@@ -118,14 +118,16 @@ func ensure_db() {
   }
   let t = now();
   // 列表不支持 list[i] 下标(解析器遇 [ 报错),嵌套 [sql, params] 取不出;
-  // 用 map 字面量(sql/params 键,成员访问 e.sql / e.params)承载
+  // 用 map 字面量(sql/params 键,成员访问 e.sql / e.params)承载。
+  // 演示数据刻意「一眼假」:占位名(张三/李四) + example.com(IANA 保留给文档的
+  // 域名,不可能是真邮箱) + 连号演示手机号,杜绝与任何真实人物/企业撞车。
   let seed = [
-    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [1, "林晓", "蓝湾科技", "linxiao@lanwan.dev", "13800000001", t] },
-    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [2, "陈默", "山海资本", "chenmo@shancai.vc", "13800000002", t] },
-    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [1, 1, "蓝湾 · 私有部署", "谈判", 120000.0, t] },
-    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [2, 2, "山海 · 年度席位", "初步接洽", 45000.0, t] },
-    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [1, 1, "会议", "需求评审,确认私有化部署要求", t - 86400] },
-    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [2, 2, "电话", "首次触达,约了下周演示", t - 172800] },
+    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [1, "张三", "示例科技有限公司", "zhangsan@example.com", "13000000001", t] },
+    { sql: "INSERT INTO customers (id, name, company, email, phone, created) VALUES (?, ?, ?, ?, ?, ?)", params: [2, "李四", "演示数据有限公司", "lisi@example.com", "13000000002", t] },
+    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [1, 1, "示例 · 私有部署", "谈判", 120000.0, t] },
+    { sql: "INSERT INTO deals (id, customer, title, stage, amount, updated) VALUES (?, ?, ?, ?, ?, ?)", params: [2, 2, "演示 · 年度席位", "初步接洽", 45000.0, t] },
+    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [1, 1, "会议", "演示跟进记录:需求评审(示例数据)", t - 86400] },
+    { sql: "INSERT INTO activities (id, customer, kind, note, at) VALUES (?, ?, ?, ?, ?)", params: [2, 2, "电话", "演示跟进记录:首次触达(示例数据)", t - 172800] },
   ];
   for (s in seed) {
     let r = try(() => sql_write(crm_db, s.sql, s.params));
