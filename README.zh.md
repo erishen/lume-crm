@@ -114,7 +114,6 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   再狠也没有可调用的破坏面,故**无需鉴权即可安全公网演示**:访客能看全部数据、
   能跟真模型聊天,但玩不坏。已实测 A/B:可写+注入"删除客户"→ 真删;只读+同款
   注入 → Agent 无删除工具可调,数据完好。本地开发不设该变量 = 完全可写。
-  评估详见 `SECURITY-ASSESSMENT.md`。
 - **公网鉴权(实测厘清)**:lume 的 Basic Auth 门是**全局的**——自定义 `/api/*`
   与内置路由同一道前置门(`http.c`/`event.c` 在路由分发前校验),无/错凭据一律
   401(fail-closed)。容器设 `LUME_AUTH_USER` + `LUME_AUTH_PASSWORD`,entrypoint

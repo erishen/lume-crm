@@ -136,7 +136,7 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   with a real model, but cannot break anything. Verified A/B: writable + injection
   of "delete the customer" → really deletes; read-only + same injection → agent has
   no delete tool to call, data intact. Local development without the variable =
-  fully writable. See `SECURITY-ASSESSMENT.md` for the full assessment.
+  fully writable.
 - **Public auth (clarified by testing)**: lume's Basic Auth gate is **global** —
   custom `/api/*` routes and built-in routes share the same front gate
   (`http.c`/`event.c` validate before route dispatch); missing/wrong credentials are

@@ -6,7 +6,8 @@ English · companion to [README.md](README.md) / [README.zh.md](README.zh.md)
 > *how the pieces fit*: the request topology, the agent tool-calling loop, how the
 > read-only flag propagates through every layer, and the deployment shapes. It is
 > intentionally short — the data-layer rationale lives in README
-> ("Data-layer design"), the security test matrix in `SECURITY-ASSESSMENT.md`.
+> ("Data-layer design"); the read-only A/B verification results are inline in
+> README's Docker notes.
 
 ## The big picture
 
@@ -96,7 +97,7 @@ through every layer — this is what makes an unauthenticated public demo safe:
 | Native tools (container entrypoint) | `HARNESS_TOOLS_ALLOW` trimmed | chat agent loses `read_file`/`fetch_url` — no file-read or outbound channels |
 | Frontend (`chat.tsx`) | `LOCAL` hostname check | query-only quick prompts / greeting / subtitle on public; write-type entries appear only on localhost dev |
 
-Verified A/B (see `SECURITY-ASSESSMENT.md`): writable + injected "delete the
+Verified A/B: writable + injected "delete the
 customer" → really deletes; read-only + same injection → agent has no delete
 tool to call, data intact. `/discovery` self-publishes the readonly flag and
 the (trimmed) tool list, so the security story is visible on the page itself.
