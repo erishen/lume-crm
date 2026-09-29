@@ -157,7 +157,6 @@ th {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 tbody tr:last-child td {
