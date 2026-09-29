@@ -37,6 +37,9 @@ copy-pasteable `.lume` DSL snippets) and a site-wide footer
 
 ## How it fits together
 
+> Flow diagrams, the agent tool-calling loop and how the read-only flag
+> propagates: see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 All business logic lives in a single `.lume` script (served by the C11 single binary
 `lume`). The frontend is a React + TypeScript **SPA with history routing**, bundled by
 esbuild into one `app.js` dropped into the docroot. There is no Node service — data is

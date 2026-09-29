@@ -34,6 +34,9 @@ Agent 只注册查询类工具(`crm_search_customers` / `crm_get_customer`),前�
 
 ## 技术形态
 
+> 请求流图、Agent 工具调用循环与只读模式的传导机制:见
+> [ARCHITECTURE.md](ARCHITECTURE.md)(英文)。
+
 业务逻辑全在一个 `.lume` 脚本里(C11 单二进制 `lume` 服务端),前端是 React +
 TypeScript **单页应用(history 路由)**,esbuild 打成单一 `app.js` 落进 docroot。
 没有 Node 服务——数据是 **Lume 原生 SQLite 内建**(`sql_query` 物理只读 /
