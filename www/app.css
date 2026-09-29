@@ -332,11 +332,32 @@ label.field {
 .msgs {
   list-style: none;
   margin: 0;
-  padding: 4px 0;
+  padding: 4px 8px 4px 0;
   overflow-y: auto;
   flex: 1;
   display: flex;
   flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+/* 细滚动条:聊天流(.msgs)与代码块(pre)共用 */
+.msgs::-webkit-scrollbar,
+pre::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.msgs::-webkit-scrollbar-track,
+pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+.msgs::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+.msgs::-webkit-scrollbar-thumb:hover,
+pre::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 .msgs .note {
   color: var(--muted);
@@ -379,6 +400,31 @@ label.field {
 .input-bar input {
   flex: 1;
 }
+/* 快捷问题 chips(输入框上方,点一下直接发送;title 显示对应 crm_* 工具) */
+.quick-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.quick-chip {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.quick-chip:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.quick-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .busy {
   color: var(--warn);
   font-size: 13px;
@@ -409,6 +455,36 @@ label.field {
   margin: 8px 0;
 }
 .msg .md pre code { background: none; padding: 0; }
+/* agent 数据表格:圆角容器 + 横向滚动,斑马纹,表头浅底 */
+.msg .md .tbl {
+  overflow-x: auto;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.msg .md table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.msg .md th,
+.msg .md td {
+  padding: 7px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.msg .md th {
+  background: var(--panel-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+.msg .md tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+.msg .md tbody tr:last-child td {
+  border-bottom: none;
+}
 .msg .md code {
   background: rgba(56, 189, 248, 0.12);
   border-radius: 4px;
@@ -434,4 +510,191 @@ label.field {
 .stage-select.busy {
   opacity: 0.5;
   cursor: wait;
+}
+
+/* ------------------------------------------------ 宣传语 hero（仪表盘顶部） */
+.hero {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.14), rgba(56, 189, 248, 0.04));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.hero-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.2px;
+}
+.hero-sub {
+  color: var(--muted);
+  margin: 8px 0 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.hero-sub code,
+.ex-v code,
+.ex-hero code {
+  background: rgba(56, 189, 248, 0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* ------------------------------------------------ 示例页 /examples */
+main.wrap.examples .ex-hero {
+  margin-bottom: 18px;
+}
+main.wrap.examples h1 {
+  font-size: 24px;
+  line-height: 1.35;
+}
+.ex-hero .hero-sub {
+  max-width: 70ch;
+}
+.ex-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.ex-card h2 {
+  font-size: 16px;
+  margin: 0 0 14px;
+  color: var(--ink);
+}
+.ex-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ex-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+}
+.ex-k {
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.ex-v {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.code-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+}
+.tab {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tab.active {
+  border-color: var(--accent);
+  color: var(--ink);
+  background: rgba(56, 189, 248, 0.12);
+}
+.tab.static {
+  cursor: default;
+  border-style: dashed;
+}
+/* 代码块 = 标题栏（语言标签 + 复制）+ 代码体，纯文档流布局，无绝对定位：
+   标签永远不可能压到代码首行。 */
+.code-block {
+  background: #0b1020;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+.code-lang {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #5b7099;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.copy-btn {
+  flex: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.code-block pre {
+  margin: 0;
+  padding: 12px 16px;
+  color: #cfe3ff;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  max-height: 460px;
+}
+.code-block pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.copy-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+@media (max-width: 720px) {
+  .ex-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ------------------------------------------------ 全站页脚 */
+footer.foot {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 16px 24px 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+footer.foot a {
+  color: var(--accent);
+  text-decoration: none;
+}
+footer.foot a:hover {
+  text-decoration: underline;
+}
+footer.foot .foot-links {
+  display: flex;
+  gap: 16px;
+  flex: none;
 }

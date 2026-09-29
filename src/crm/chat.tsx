@@ -23,6 +23,24 @@ function getSessionId(): string {
 
 type Msg = { role: "user" | "agent"; text: string; notes: string[] };
 
+/* 快捷问题:每个注册的 crm_* 工具给一句可直接发送的示例问法,
+ * 点 chip = 直接问(title 提示对应工具)。
+ * 写类工具仅在本地开发显示:线上以 LUME_CRM_READONLY=1 运行,
+ * 增删改工具整体不进注册表(见 db.lume),列出来只会误导。 */
+const LOCAL = /^(localhost|127\.0\.0\.1)(:|$)/.test(location.hostname);
+
+const QUICK: { tool: string; q: string }[] = [
+  { tool: "crm_search_customers", q: "列出所有客户" },
+  { tool: "crm_get_customer", q: "看看客户 1 的详情" },
+  ...(LOCAL
+    ? [
+        { tool: "crm_add_customer", q: "新增客户：王磊，恒岳传媒，wanglei@hengyue.cn" },
+        { tool: "crm_add_deal", q: "给客户 2 加一个商机：并购顾问，金额 80000" },
+        { tool: "crm_add_activity", q: "给客户 1 记一条电话跟进：聊了续费意向" },
+      ]
+    : []),
+];
+
 async function streamChat(args: {
   message: string;
   sessionId: string;
@@ -91,9 +109,8 @@ export function Chat(): React.ReactElement {
     setMessages([]);
   }
 
-  async function send(e: React.FormEvent): Promise<void> {
-    e.preventDefault();
-    const text = input.trim();
+  async function doSend(raw: string): Promise<void> {
+    const text = raw.trim();
     if (!text || busy) return;
     setInput("");
     const controller = new AbortController();
@@ -126,17 +143,31 @@ export function Chat(): React.ReactElement {
     }
   }
 
+  function send(e: React.FormEvent): void {
+    e.preventDefault();
+    doSend(input);
+  }
+
   const last = messages[messages.length - 1];
   const lastNote = last?.role === "agent" ? last.notes[last.notes.length - 1] ?? "" : "";
 
   return (
     <main className="wrap chat-page">
-        <p className="subtitle">本地 CRM 助手 · 试试「把客户 1 的商机改成谈判」或「给客户 2 记一条电话跟进」</p>
+        <p className="subtitle">
+          {LOCAL
+            ? "Lume CRM 助手 · 试试「把客户 1 的商机改成谈判」或「给客户 2 记一条电话跟进」"
+            : "Lume CRM 助手 · 试试「列出所有客户」或「看看客户 1 的详情」"}
+        </p>
         <ul className="msgs" ref={listRef}>
           {messages.length === 0 && (
             <li className="note">
-              我是本地 CRM 助手,可用工具:<code>crm_search_customers</code>、<code>crm_get_customer</code>、
-              <code>crm_add_customer</code>、<code>crm_add_deal</code>、<code>crm_add_activity</code>。
+              我是 Lume CRM 助手,可用工具:<code>crm_search_customers</code>、<code>crm_get_customer</code>
+              {LOCAL && (
+                <>
+                  、<code>crm_add_customer</code>、<code>crm_add_deal</code>、<code>crm_add_activity</code>
+                </>
+              )}
+              。
             </li>
           )}
           {messages.map((m, i) =>
@@ -163,13 +194,27 @@ export function Chat(): React.ReactElement {
               </li>
             ),
           )}
-          {busy && <li className="note busy">agent 处理中 · {lastNote}</li>}
+          {busy && <li className="note busy">Lume 处理中 · {lastNote}</li>}
         </ul>
+        <div className="quick-row">
+          {QUICK.map(({ tool, q }) => (
+            <button
+              key={tool}
+              type="button"
+              className="quick-chip"
+              disabled={busy}
+              title={tool}
+              onClick={() => doSend(q)}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
         <form className="input-bar" onSubmit={send}>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={busy ? "agent 正在处理…" : "输入指令,回车发送…"}
+            placeholder={busy ? "Lume 正在处理…" : "输入指令,回车发送…"}
             autoComplete="off"
             disabled={busy}
           />

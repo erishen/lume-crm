@@ -65,6 +65,13 @@ export function Dashboard(): React.ReactElement {
 
   const shell = (body: React.ReactNode): React.ReactElement => (
     <main className="wrap">
+      <div className="hero">
+        <div className="hero-title">一份 .lume 脚本，写完后端、数据库和 AI Agent</div>
+        <p className="hero-sub">
+          用 Lume 开发后台：服务端零其它语言，单二进制 <code>lume</code> + 一份 <code>.lume</code> 脚本撑起整套 CRM。想照着写？看「用 Lume 开发」。
+        </p>
+        <a className="btn" href="/examples">看 Lume 怎么写 →</a>
+      </div>
       <h1>仪表盘</h1>
       <p className="subtitle">
         Lume + React CRM · 数据落 .data/crm.db(SQLite · sql_query/sql_write) ·

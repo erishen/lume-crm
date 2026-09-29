@@ -9,9 +9,10 @@ node_modules/
 logs/
 *.log
 
-# 构建产物(esbuild 输出);手写的 www/app.css 与 www/index.html 是源码,保留
-www/app.js
-www/chunk-*.js
+# 构建产物 www/app.js 入库跟踪:Dockerfile 是 COPY www/ 容器内不重编,
+# 忽略它会让 fresh clone 的 docker build 出白屏镜像。改 src/crm/ 后必须
+# `npm run build`(或 esbuild 重打包)并把产物一并提交。
+# 手写的 www/app.css 与 www/index.html 是源码,本就跟踪。
 
 # bin/(本仓不自建二进制,用 ../lume/bin/lume)
 bin/

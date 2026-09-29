@@ -19,6 +19,14 @@
 
 > 一句话:**写业务只写 `.lume` + 前端,不碰任何其它语言运行时。**
 
+## 线上只读演示
+
+<https://lume-crm.erishen.cn> 以 `LUME_CRM_READONLY=1` 运行:写 API 全部 403,
+Agent 只注册查询类工具(`crm_search_customers` / `crm_get_customer`),前端也
+只展示查询入口(写类快捷问法/示例仅在本地 localhost 开发时出现)。页面含
+「用 Lume 开发」教学页(`/examples`,五段可复制的 `.lume` DSL 片段)与全站
+页脚(开源仓 + 介绍文章)。本地可写运行:`LUME_CRM_READONLY= docker compose up`。
+
 ## 技术形态
 
 业务逻辑全在一个 `.lume` 脚本里(C11 单二进制 `lume` 服务端),前端是 React +

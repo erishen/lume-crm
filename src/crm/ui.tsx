@@ -10,11 +10,14 @@ export function Nav(): React.ReactElement {
     ? "/customers"
     : p === "/chat"
       ? "/chat"
-      : "/";
+      : p === "/examples"
+        ? "/examples"
+        : "/";
   const links: [string, string][] = [
     ["/", "仪表盘"],
     ["/customers", "客户"],
     ["/chat", "Agent"],
+    ["/examples", "用 Lume 开发"],
   ];
   return (
     <nav className="top">
@@ -25,6 +28,29 @@ export function Nav(): React.ReactElement {
         </a>
       ))}
     </nav>
+  );
+}
+
+/* 全站页脚:开源仓 + 介绍文章外链(target=_blank,app.tsx 的点击拦截会放行)。 */
+export function Footer(): React.ReactElement {
+  return (
+    <footer className="foot">
+      <span>
+        Powered by{" "}
+        <a href="https://github.com/erishen/lume" target="_blank" rel="noreferrer">
+          Lume
+        </a>{" "}
+        · 一个 .lume 脚本撑起的后台
+      </span>
+      <span className="foot-links">
+        <a href="https://github.com/erishen/lume" target="_blank" rel="noreferrer">
+          GitHub
+        </a>
+        <a href="https://erishen.cn/lume" target="_blank" rel="noreferrer">
+          介绍文章
+        </a>
+      </span>
+    </footer>
   );
 }
 

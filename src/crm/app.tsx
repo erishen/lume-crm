@@ -15,7 +15,8 @@ import { createRoot } from "react-dom/client";
 import { Dashboard } from "./dashboard";
 import { Customers } from "./customers";
 import { Chat } from "./chat";
-import { Nav } from "./ui";
+import { Examples } from "./examples";
+import { Nav, Footer } from "./ui";
 
 function parsePath(): { view: string; id?: number } {
   const p = window.location.pathname.replace(/\/+$/, "");
@@ -73,12 +74,14 @@ function App(): React.ReactElement {
   let view: React.ReactElement;
   if (route.view === "chat") view = <Chat />;
   else if (route.view === "customers") view = <Customers id={route.id} />;
+  else if (route.view === "examples") view = <Examples />;
   else view = <Dashboard />;
 
   return (
     <React.Fragment>
       <Nav />
       {view}
+      <Footer />
     </React.Fragment>
   );
 }
