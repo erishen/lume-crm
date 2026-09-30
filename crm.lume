@@ -124,7 +124,10 @@ post "/api/visit", (req) => {
   let referrer = get(b.ok, "referrer", "");
   let ua = get(b.ok, "ua", "");
   let visitor = get(b.ok, "visitor", "");
-  let ip = get(req, "remote_addr", "");
+  let ip = get(req, "x_forwarded_for", "");
+  if (ip == "" or ip == null) {
+    ip = get(req, "remote_addr", "");
+  }
   crmdb.record_visit(path, referrer, ua, visitor, ip);
   return { ok: true };
 };
