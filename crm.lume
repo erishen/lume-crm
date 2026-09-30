@@ -49,6 +49,24 @@ func write_gate() {
   return null;
 }
 
+// 访客统计只给 owner 看:配置 LUME_CRM_VISIT_PIN 后,查询必须带同名
+// query 参数(?pin=…)匹配才放行,否则 403——统计不暴露给公网访客。
+// 本地开发不设该 env = 免 PIN(自用便利);线上部署务必注入。
+// 注意:变量名刻意避开 TOKEN/KEY/SECRET 等敏感词——lume 的 env() 会把
+// 含这些词的变量名按"未设置"处理(防 DSL 侧泄露密钥),会静默关闭门禁。
+// req 不暴露 headers 字段(见 src/bridge.c),故 PIN 走 query_params。
+let visit_pin = env("LUME_CRM_VISIT_PIN");
+func visit_gate(req) {
+  if (visit_pin == null or visit_pin == "") {
+    return null;
+  }
+  let got = get(req.query_params, "pin", "");
+  if (got != visit_pin) {
+    return { status: 403, body: { err: "forbidden" } };
+  }
+  return null;
+}
+
 // 领域层:SQLite 助手 + crm_* 聊天工具(import 时建库/灌种子,tool 顶层注册)
 import "src/db.lume" as crmdb;
 
@@ -87,12 +105,16 @@ get "/api/stats", (req) => {
   return crmdb.stats_payload();
 };
 
+// 访客统计:owner-only(GET /api/visits 走 visit_gate 校验)。
 get "/api/visits", (req) => {
+  let gate = visit_gate(req);
+  if (gate != null) { return gate; }
   return crmdb.visits_summary();
 };
 
-// 访客埋点:记录一次页面访问(不 gate——只读演示也要统计访问量;无 IP,
-// 去重靠前端 localStorage 的 visitor id,隐私干净)。
+// 访客埋点:记录一次页面访问(不 gate——只读演示也要统计访问量)。
+// IP 取连接端 req.remote_addr(仅 owner 经 PIN 门禁可见),去重靠前端
+// localStorage 的 visitor id。
 post "/api/visit", (req) => {
   let b = body_of(req);
   if (b.err != null) {
@@ -102,7 +124,8 @@ post "/api/visit", (req) => {
   let referrer = get(b.ok, "referrer", "");
   let ua = get(b.ok, "ua", "");
   let visitor = get(b.ok, "visitor", "");
-  crmdb.record_visit(path, referrer, ua, visitor);
+  let ip = get(req, "remote_addr", "");
+  crmdb.record_visit(path, referrer, ua, visitor, ip);
   return { ok: true };
 };
 

@@ -50,19 +50,6 @@ export interface Stats {
   customers: CustomerRow[];
 }
 
-export interface VisitDay {
-  d: string;
-  pv: number;
-  uv: number;
-}
-
-export interface VisitsSummary {
-  total: number;
-  today: number;
-  uv: number;
-  days: VisitDay[];
-}
-
 export async function apiGet<T>(url: string): Promise<T> {
   const r = await window.fetch(url);
   if (!r.ok) throw new Error(url + " -> HTTP " + r.status);
@@ -146,10 +133,6 @@ export function apiRecordVisit(): Promise<{ ok: boolean }> {
     ua: navigator.userAgent,
     visitor,
   });
-}
-
-export function apiVisits(): Promise<VisitsSummary> {
-  return apiGet<VisitsSummary>("/api/visits");
 }
 
 export function apiMeta(): Promise<Meta> {
