@@ -1,7 +1,7 @@
 /* 客户列表 + 详情视图(SPA 内导出,由 app.tsx 按 /customers[/N] 挂载)。 */
 import React from "react";
 import { apiGet, apiPost, apiUpdateDeal, apiUpdateCustomer, apiDeleteCustomer, apiDeleteDeal, apiDeleteActivity, CustomerRow, CustomerDetail as CustomerDetailData } from "../api";
-import { fmtMoney, stageClass, go, useMeta } from "./ui";
+import { fmtMoney, stageClass, go, useMeta, IS_LOCAL } from "./ui";
 
 export function CustomerList(): React.ReactElement {
   const [rows, setRows] = React.useState<CustomerRow[] | null>(null);
@@ -73,37 +73,40 @@ export function CustomerList(): React.ReactElement {
       <h1>客户</h1>
       <p className="subtitle">共 {rows.length} 位客户 · 点名字看全档(商机 + 跟进)</p>
 
-      <form className="inline" onSubmit={addDeal}>
-        <label className="field">
-          客户
-          <select value={custId} onChange={(e) => setCustId(e.target.value)}>
-            {rows.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          商机标题
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="如:私有部署" />
-        </label>
-        <label className="field">
-          阶段
-          <select value={stage} onChange={(e) => setStage(e.target.value)}>
-            {stages.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          金额
-          <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" inputMode="decimal" />
-        </label>
-        <button className="btn" type="submit" disabled={busy || !title.trim() || !custId}>
-          加商机
-        </button>
-      </form>
+      {/* 加商机表单:仅本地开发显示(线上只读,服务端 403) */}
+      {IS_LOCAL && (
+        <form className="inline" onSubmit={addDeal}>
+          <label className="field">
+            客户
+            <select value={custId} onChange={(e) => setCustId(e.target.value)}>
+              {rows.map((c) => (
+                <option key={c.id} value={String(c.id)}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            商机标题
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="如:私有部署" />
+          </label>
+          <label className="field">
+            阶段
+            <select value={stage} onChange={(e) => setStage(e.target.value)}>
+              {stages.map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            金额
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" inputMode="decimal" />
+          </label>
+          <button className="btn" type="submit" disabled={busy || !title.trim() || !custId}>
+            加商机
+          </button>
+        </form>
+      )}
       {msg && <div className="err">{msg}</div>}
 
       <table>
@@ -319,12 +322,17 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
             >
               分享页
             </a>
-            <button className="btn ghost" onClick={startEdit}>
-              编辑资料
-            </button>
-            <button className="btn danger" onClick={removeCustomer} disabled={delBusy}>
-              删除客户
-            </button>
+            {/* 编辑/删除仅本地开发可见(线上只读演示,服务端 403) */}
+            {IS_LOCAL && (
+              <>
+                <button className="btn ghost" onClick={startEdit}>
+                  编辑资料
+                </button>
+                <button className="btn danger" onClick={removeCustomer} disabled={delBusy}>
+                  删除客户
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -340,7 +348,7 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
                 <th>阶段</th>
                 <th className="num">金额</th>
                 <th className="num">更新</th>
-                <th className="num">操作</th>
+                {IS_LOCAL && <th className="num">操作</th>}
               </tr>
             </thead>
             <tbody>
@@ -348,24 +356,31 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
                 <tr key={x.id}>
                   <td>{x.title}</td>
                   <td>
-                    <select
-                      className={"stage-select" + (updating === x.id ? " busy" : "")}
-                      value={x.stage}
-                      disabled={updating === x.id}
-                      onChange={(e) => moveStage(x.id, e.target.value)}
-                    >
-                      {(stages.includes(x.stage) ? stages : [x.stage, ...stages]).map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
-                    </select>
+                    {/* 推进管道:本地可写时下拉,线上只读演示渲染为阶段徽章 */}
+                    {IS_LOCAL ? (
+                      <select
+                        className={"stage-select" + (updating === x.id ? " busy" : "")}
+                        value={x.stage}
+                        disabled={updating === x.id}
+                        onChange={(e) => moveStage(x.id, e.target.value)}
+                      >
+                        {(stages.includes(x.stage) ? stages : [x.stage, ...stages]).map((s) => (
+                          <option key={s}>{s}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className={stageClass(x.stage)}>{x.stage}</span>
+                    )}
                   </td>
                   <td className="num">{fmtMoney(x.amount)}</td>
                   <td className="num">{x.updated_fmt || "—"}</td>
-                  <td className="num">
-                    <button className="btn tiny danger" onClick={() => removeDeal(x)}>
-                      删
-                    </button>
-                  </td>
+                  {IS_LOCAL && (
+                    <td className="num">
+                      <button className="btn tiny danger" onClick={() => removeDeal(x)}>
+                        删
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -374,23 +389,26 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
 
         <div className="panel">
           <h2>跟进({d.activities.length})</h2>
-          <form className="inline" onSubmit={addActivity}>
-            <label className="field">
-              类型
-              <select value={kind} onChange={(e) => setKind(e.target.value)}>
-                {kinds.map((k) => (
-                  <option key={k}>{k}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              内容
-              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="今天聊了什么" />
-            </label>
-            <button className="btn" type="submit" disabled={busy || !note.trim()}>
-              记录
-            </button>
-          </form>
+          {/* 记跟进表单:仅本地开发可见(线上只读演示) */}
+          {IS_LOCAL && (
+            <form className="inline" onSubmit={addActivity}>
+              <label className="field">
+                类型
+                <select value={kind} onChange={(e) => setKind(e.target.value)}>
+                  {kinds.map((k) => (
+                    <option key={k}>{k}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                内容
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="今天聊了什么" />
+              </label>
+              <button className="btn" type="submit" disabled={busy || !note.trim()}>
+                记录
+              </button>
+            </form>
+          )}
           {d.activities.map((a) => (
             <div className="act" key={a.id}>
               <span className={stageClass("")}>{a.kind}</span>{" "}
@@ -399,7 +417,7 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
                 <span className="sys" title="推进到终态时系统自动留痕,不可删">
                   系统
                 </span>
-              ) : (
+              ) : IS_LOCAL ? (
                 <button
                   className="btn tiny ghost act-del"
                   title="删除这条跟进"
@@ -407,7 +425,7 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
                 >
                   ×
                 </button>
-              )}
+              ) : null}
               <div className="meta">{a.at_fmt}</div>
             </div>
           ))}

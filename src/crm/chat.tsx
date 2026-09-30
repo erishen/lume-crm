@@ -3,6 +3,7 @@
  * 需 .env 配 LLM_API_URL/LLM_MODEL/LLM_API_KEY;留空 = 离线演示引擎。 */
 import React from "react";
 import { renderMarkdown } from "./markdown";
+import { IS_LOCAL as LOCAL } from "./ui";
 
 const SID_KEY = "lume.crm.sid";
 
@@ -26,8 +27,8 @@ type Msg = { role: "user" | "agent"; text: string; notes: string[] };
 /* 快捷问题:每个注册的 crm_* 工具给一句可直接发送的示例问法,
  * 点 chip = 直接问(title 提示对应工具)。
  * 写类工具仅在本地开发显示:线上以 LUME_CRM_READONLY=1 运行,
- * 增删改工具整体不进注册表(见 db.lume),列出来只会误导。 */
-const LOCAL = /^(localhost|127\.0\.0\.1)(:|$)/.test(location.hostname);
+ * 增删改工具整体不进注册表(见 db.lume),列出来只会误导。
+ * 判断在 ui.tsx 的 IS_LOCAL(单一事实源,与其它页共用)。 */
 
 const QUICK: { tool: string; q: string }[] = [
   { tool: "crm_search_customers", q: "列出所有客户" },

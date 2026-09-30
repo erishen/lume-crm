@@ -1,7 +1,7 @@
 /* 仪表盘视图(SPA 内导出,由 app.tsx 挂载):统计卡 + 商机管道 + 客户总表。 */
 import React from "react";
 import { CustomerRow, apiPost } from "../api";
-import { useStats, fmtMoney, useMeta } from "./ui";
+import { useStats, fmtMoney, useMeta, IS_LOCAL } from "./ui";
 
 function CustomerForm({ onDone, onErr }: { onDone: () => void; onErr: (m: string) => void }) {
   const [name, setName] = React.useState("");
@@ -129,7 +129,8 @@ export function Dashboard(): React.ReactElement {
         </div>
       )}
 
-      <CustomerForm onDone={reload} onErr={(m) => setMsg(m)} />
+      {/* 只读演示(非 localhost)隐藏新建客户表单——服务端写 API 403,表单只会误导 */}
+      {IS_LOCAL && <CustomerForm onDone={reload} onErr={(m) => setMsg(m)} />}
       {msg && <div className="err">{msg}</div>}
 
       <table>

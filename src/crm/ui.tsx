@@ -4,6 +4,12 @@
 import React from "react";
 import { Stats, Meta, apiGet, apiMeta, fmtMoney, DEAL_STAGES } from "../api";
 
+/* 本地开发 vs 公网只读演示(与 chat.tsx 原 LOCAL 同源判断):
+ * 线上以 LUME_CRM_READONLY=1 运行——服务端写 API 全 403、Agent 写工具
+ * 不进注册表;前端据此隐藏全部写 UI(加商机/新建客户/编辑/删除/推进/记跟进),
+ * 避免访客看到"可用却提交 403"的表单。localhost/127.0.0.1 = 本地可写。 */
+export const IS_LOCAL = /^(localhost|127\.0\.0\.1)(:|$)/.test(location.hostname);
+
 export function Nav(): React.ReactElement {
   const p = window.location.pathname;
   const active = p.startsWith("/customers")
