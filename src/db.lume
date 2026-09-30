@@ -103,6 +103,7 @@ func ensure_db() {
     "CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, company TEXT, email TEXT, phone TEXT, created INTEGER)",
     "CREATE TABLE IF NOT EXISTS deals (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER, title TEXT, stage TEXT, amount REAL, updated INTEGER)",
     "CREATE TABLE IF NOT EXISTS activities (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER, kind TEXT, note TEXT, at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, referrer TEXT, ua TEXT, visitor TEXT, created INTEGER)",
   ];
   for (s in ddl) {
     let r = try(() => sql_write(crm_db, s));
@@ -235,6 +236,28 @@ export func stats_payload() {
     by_stage: by_stage,
     customers: custs,
   };
+}
+
+// ---------------------------------------------------------------- 访客统计
+// visits 表只存 path/referrer/ua/visitor/时间,不存 IP——访客去重靠前端
+// localStorage 生成的 visitor id,隐私干净(合规友好,线上只读模式也照常记录)。
+export func record_visit(path, referrer, ua, visitor) {
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO visits (path, referrer, ua, visitor, created) VALUES (?, ?, ?, ?, ?)",
+    [path, referrer, ua, visitor, int(now())]));
+  return r.err == null;
+}
+
+export func visits_summary() {
+  let total = int(get(q("SELECT COUNT(*) AS n FROM visits", null), 0, {}), "n", 0);
+  let today = int(get(q("SELECT COUNT(*) AS n FROM visits WHERE date(created,'unixepoch','localtime') = date('now','localtime')", null), 0, {}), "n", 0);
+  let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits", null), 0, {}), "n", 0);
+  let start = int(now()) - 13 * 86400;
+  let days = [];
+  for (s in q("SELECT date(created,'unixepoch','localtime') AS d, COUNT(*) AS pv, COUNT(DISTINCT visitor) AS uv FROM visits WHERE created >= ? GROUP BY d ORDER BY d DESC LIMIT 14", [start])) {
+    push(days, { d: s.d, pv: int(s.pv), uv: int(s.uv) });
+  }
+  return { total: total, today: today, uv: uv, days: days };
 }
 
 // ---------------------------------------------------------------- 写路径

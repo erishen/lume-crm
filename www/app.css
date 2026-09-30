@@ -122,6 +122,32 @@ h1 {
   margin-top: 4px;
 }
 
+/* visits:访客统计区(总访问/今日/独立访客/近 14 天迷你分布) */
+.cards.visits {
+  margin-top: 4px;
+}
+.card.wide {
+  flex: 1 1 100%;
+}
+.days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.day {
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: default;
+}
+.day:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* pipeline stages */
 .stages {
   display: flex;

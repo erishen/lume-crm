@@ -6,6 +6,8 @@
 //   GET  /api/customers?q=          客户列表(可选 ?q= 模糊筛选)
 //   GET  /api/customer?id=<n>      客户全档
 //   GET  /api/stats                 仪表盘统计
+//   GET  /api/visits                访客统计(总 PV/今日/独立访客/近 14 天)
+//   POST /api/visit                 访客埋点(前端加载时上报,不受只读限制)
 //   POST /api/customers             新建客户
 //   POST /api/deals                 新建商机
 //   POST /api/deals/update          改商机阶段/金额/标题(空字段=不改)
@@ -83,6 +85,25 @@ func resp(res, created) {
 // ------------------------------------------------ 读路径(sql_query 物理只读,免锁)
 get "/api/stats", (req) => {
   return crmdb.stats_payload();
+};
+
+get "/api/visits", (req) => {
+  return crmdb.visits_summary();
+};
+
+// 访客埋点:记录一次页面访问(不 gate——只读演示也要统计访问量;无 IP,
+// 去重靠前端 localStorage 的 visitor id,隐私干净)。
+post "/api/visit", (req) => {
+  let b = body_of(req);
+  if (b.err != null) {
+    return { status: 400, body: { err: b.err } };
+  }
+  let path = get(b.ok, "path", "");
+  let referrer = get(b.ok, "referrer", "");
+  let ua = get(b.ok, "ua", "");
+  let visitor = get(b.ok, "visitor", "");
+  crmdb.record_visit(path, referrer, ua, visitor);
+  return { ok: true };
 };
 
 get "/api/customers", (req) => {

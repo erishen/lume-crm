@@ -2,7 +2,7 @@
  * history 路由:链接用干净路径(/customers…),点击由 app.tsx 的 click 拦截做
  * 客户端导航;直接访问/刷新由服务端 spa=true 回退到 index.html。 */
 import React from "react";
-import { Stats, Meta, apiGet, apiMeta, fmtMoney, DEAL_STAGES } from "../api";
+import { Stats, Meta, VisitsSummary, apiGet, apiMeta, apiVisits, fmtMoney, DEAL_STAGES } from "../api";
 
 /* 本地开发 vs 公网只读演示(与 chat.tsx 原 LOCAL 同源判断):
  * 线上以 LUME_CRM_READONLY=1 运行——服务端写 API 全 403、Agent 写工具
@@ -75,6 +75,15 @@ export function useStats(): { data: Stats | null; err: string; reload: () => voi
     load();
   }, [load]);
   return { data, err, reload: load };
+}
+
+export function useVisits(): { data: VisitsSummary | null; err: string } {
+  const [data, setData] = React.useState<VisitsSummary | null>(null);
+  const [err, setErr] = React.useState("");
+  React.useEffect(() => {
+    apiVisits().then(setData, (e: Error) => setErr(e.message));
+  }, []);
+  return { data, err };
 }
 
 /* 业务字典 hook:阶段白名单 / 终态标记 / 默认阶段 / 跟进类型建议集,从服务端 /api/meta 拉。

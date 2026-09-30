@@ -17,6 +17,7 @@ import { Customers } from "./customers";
 import { Chat } from "./chat";
 import { Examples } from "./examples";
 import { Nav, Footer } from "./ui";
+import { apiRecordVisit } from "../api";
 
 function parsePath(): { view: string; id?: number } {
   const p = window.location.pathname.replace(/\/+$/, "");
@@ -40,6 +41,11 @@ function navigate(href: string): void {
 
 function App(): React.ReactElement {
   const [route, setRoute] = React.useState(parsePath);
+
+  // 访客埋点:每次路由(含首次加载)上报一次 PV。失败静默,不阻塞页面。
+  React.useEffect(() => {
+    apiRecordVisit().catch(() => {});
+  }, [route]);
 
   React.useEffect(() => {
     const onNav = (): void => setRoute(parsePath());

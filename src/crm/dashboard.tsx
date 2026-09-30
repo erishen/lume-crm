@@ -1,7 +1,7 @@
 /* 仪表盘视图(SPA 内导出,由 app.tsx 挂载):统计卡 + 商机管道 + 客户总表。 */
 import React from "react";
 import { CustomerRow, apiPost } from "../api";
-import { useStats, fmtMoney, useMeta, IS_LOCAL } from "./ui";
+import { useStats, useVisits, fmtMoney, useMeta, IS_LOCAL } from "./ui";
 
 function CustomerForm({ onDone, onErr }: { onDone: () => void; onErr: (m: string) => void }) {
   const [name, setName] = React.useState("");
@@ -60,6 +60,7 @@ function CustomerForm({ onDone, onErr }: { onDone: () => void; onErr: (m: string
 
 export function Dashboard(): React.ReactElement {
   const { data, err, reload } = useStats();
+  const { data: visits } = useVisits();
   const [msg, setMsg] = React.useState("");
   const { stages: metaStages } = useMeta();
 
@@ -116,6 +117,35 @@ export function Dashboard(): React.ReactElement {
           </div>
         </div>
       </div>
+
+      {visits && (
+        <div className="cards visits">
+          <div className="card">
+            <div className="label">总访问</div>
+            <div className="value">{visits.total}</div>
+          </div>
+          <div className="card">
+            <div className="label">今日</div>
+            <div className="value">{visits.today}</div>
+          </div>
+          <div className="card">
+            <div className="label">独立访客</div>
+            <div className="value">{visits.uv}</div>
+          </div>
+          {visits.days.length > 0 && (
+            <div className="card wide">
+              <div className="label">近 14 天</div>
+              <div className="days">
+                {[...visits.days].reverse().map((d) => (
+                  <span className="day" key={d.d} title={`${d.d} · ${d.pv} 次访问 / ${d.uv} 人`}>
+                    {d.d.slice(5)}·{d.pv}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {stages.length > 0 && (
         <div className="stages">
