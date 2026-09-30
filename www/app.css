@@ -711,3 +711,22 @@ footer.foot .foot-links {
   gap: 16px;
   flex: none;
 }
+
+/* 隐私告知（访客统计用途说明） */
+body {
+  padding-bottom: 32px;
+}
+.privacy-note {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 12px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8fa0c0;
+  background: rgba(13, 18, 32, 0.82);
+  backdrop-filter: blur(4px);
+  z-index: 900;
+}
