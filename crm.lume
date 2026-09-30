@@ -72,7 +72,7 @@ func body_of(req) {
 func resp(res, created) {
   let err = get(res, "err", null);
   if (err != null) {
-    return { status: int(get(res, "status", 500)), body: { err: err } };
+    return { status: int(res, "status", 500), body: { err: err } };
   }
   if (created) {
     return { status: 201, body: res };
@@ -93,7 +93,7 @@ get "/api/customers", (req) => {
 };
 
 get "/api/customer", (req) => {
-  let id = int(get(req.query_params, "id", 0));
+  let id = int(req.query_params, "id", 0);
   let c = crmdb.customer_by_id(id);
   if (c == null) {
     return { status: 404, body: { err: "客户 " + str(id) + " 不存在" } };
@@ -110,10 +110,10 @@ post "/api/customers", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.add_customer(
-    str(get(b.ok, "name", "")),
-    str(get(b.ok, "company", "")),
-    str(get(b.ok, "email", "")),
-    str(get(b.ok, "phone", ""))), true);
+    str(b.ok, "name", ""),
+    str(b.ok, "company", ""),
+    str(b.ok, "email", ""),
+    str(b.ok, "phone", "")), true);
 };
 
 post "/api/deals", (req) => {
@@ -124,10 +124,10 @@ post "/api/deals", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.add_deal(
-    int(get(b.ok, "customer_id", 0)),
-    str(get(b.ok, "title", "")),
-    str(get(b.ok, "stage", "")),
-    float(get(b.ok, "amount", 0.0))), true);
+    int(b.ok, "customer_id", 0),
+    str(b.ok, "title", ""),
+    str(b.ok, "stage", ""),
+    float(b.ok, "amount", 0.0)), true);
 };
 
 // 推进管道:改某条商机的阶段/金额/标题(空串/零值 = 不改该字段)
@@ -139,10 +139,10 @@ post "/api/deals/update", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.update_deal(
-    int(get(b.ok, "deal_id", 0)),
-    str(get(b.ok, "stage", "")),
-    str(get(b.ok, "title", "")),
-    float(get(b.ok, "amount", 0.0))), false);
+    int(b.ok, "deal_id", 0),
+    str(b.ok, "stage", ""),
+    str(b.ok, "title", ""),
+    float(b.ok, "amount", 0.0)), false);
 };
 
 post "/api/activities", (req) => {
@@ -153,9 +153,9 @@ post "/api/activities", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.add_activity(
-    int(get(b.ok, "customer_id", 0)),
-    str(get(b.ok, "kind", "")),
-    str(get(b.ok, "note", ""))), true);
+    int(b.ok, "customer_id", 0),
+    str(b.ok, "kind", ""),
+    str(b.ok, "note", "")), true);
 };
 
 // 改客户资料(空串/空值 = 不改该字段;name 非空才覆盖)
@@ -167,11 +167,11 @@ post "/api/customers/update", (req) => {
     return { status: 400, body: { err: b.err } };
   }
   return resp(crmdb.update_customer(
-    int(get(b.ok, "customer_id", 0)),
-    str(get(b.ok, "name", "")),
-    str(get(b.ok, "company", "")),
-    str(get(b.ok, "email", "")),
-    str(get(b.ok, "phone", ""))), false);
+    int(b.ok, "customer_id", 0),
+    str(b.ok, "name", ""),
+    str(b.ok, "company", ""),
+    str(b.ok, "email", ""),
+    str(b.ok, "phone", "")), false);
 };
 
 // 删除客户(级联清掉其名下商机/跟进)
@@ -182,7 +182,7 @@ post "/api/customers/delete", (req) => {
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
   }
-  return resp(crmdb.delete_customer(int(get(b.ok, "customer_id", 0))), false);
+  return resp(crmdb.delete_customer(int(b.ok, "customer_id", 0)), false);
 };
 
 // 删一条商机
@@ -193,7 +193,7 @@ post "/api/deals/delete", (req) => {
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
   }
-  return resp(crmdb.delete_deal(int(get(b.ok, "deal_id", 0))), false);
+  return resp(crmdb.delete_deal(int(b.ok, "deal_id", 0)), false);
 };
 
 // 删一条跟进
@@ -204,14 +204,14 @@ post "/api/activities/delete", (req) => {
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
   }
-  return resp(crmdb.delete_activity(int(get(b.ok, "activity_id", 0))), false);
+  return resp(crmdb.delete_activity(int(b.ok, "activity_id", 0)), false);
 };
 
 // ------------------------------------------------ SSR:对外分享(只读,GET-only)
 // 客户分享页:纯服务端渲染(el/html 组件,零 JS),可直接外发链接。
 // 数据走已有的只读助手 customer_by_id;404 与 API 同款语义。
 get "/share/customer", (req) => {
-  let id = int(get(req.query_params, "id", 0));
+  let id = int(req.query_params, "id", 0);
   let c = crmdb.customer_by_id(id);
   if (c == null) {
     return { status: 404, body: { err: "客户 " + str(id) + " 不存在" } };

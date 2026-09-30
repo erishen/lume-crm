@@ -85,7 +85,7 @@ export func share_page(c) {
     + "<footer>由 <a href='https://github.com/erishen/lume'>lume</a> 单二进制"
     + " C11 后端渲染 · 数据于服务端 SSR,本页零 JavaScript</footer>"
     + "</div></body></html>",
-    str(c.name), str(get(c, "company", "")),
-    str(get(c, "email", "")), str(get(c, "phone", "")),
+    str(c.name), str(c, "company", ""),
+    str(c, "email", ""), str(c, "phone", ""),
     deal_rows, deal_empty, acts, act_empty);
 }

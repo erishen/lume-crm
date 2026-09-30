@@ -113,7 +113,7 @@ func ensure_db() {
   }
   // 种子:customers 表为空才灌(重复启动幂等)
   let nc = q("SELECT COUNT(*) AS n FROM customers", null);
-  if (int(get(get(nc, 0, {}), "n", 0)) > 0) {
+  if (int(get(nc, 0, {}), "n", 0) > 0) {
     return;
   }
   let t = now();
@@ -215,9 +215,9 @@ export func stats_payload() {
   let open = q("SELECT COALESCE(SUM(amount), 0.0) AS t FROM deals WHERE stage NOT IN (" + in_clause(closed_stages) + ")", null);
   let won = q("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0.0) AS t FROM deals WHERE stage = '成交'", null);
   let lost = q("SELECT COUNT(*) AS n FROM deals WHERE stage = '丢单'", null);
-  let won_n = int(get(get(won, 0, {}), "n", 0));
-  let won_amt = float(get(get(won, 0, {}), "t", 0.0));
-  let lost_n = int(get(get(lost, 0, {}), "n", 0));
+  let won_n = int(get(won, 0, {}), "n", 0);
+  let won_amt = float(get(won, 0, {}), "t", 0.0);
+  let lost_n = int(get(lost, 0, {}), "n", 0);
   // 成交率:只在有已决商机(成交或丢单)时算,分母为 0 给 0.0
   let decided = won_n + lost_n;
   let win_rate = 0.0;
@@ -226,8 +226,8 @@ export func stats_payload() {
   }
   return {
     customer_count: len(custs),
-    deal_count: int(get(get(q("SELECT COUNT(*) AS n FROM deals", null), 0, {}), "n", 0)),
-    open_pipeline: float(get(get(open, 0, {}), "t", 0.0)),
+    deal_count: int(get(q("SELECT COUNT(*) AS n FROM deals", null), 0, {}), "n", 0),
+    open_pipeline: float(get(open, 0, {}), "t", 0.0),
     won_deals: won_n,
     won_amount: won_amt,
     lost_deals: lost_n,
@@ -262,7 +262,7 @@ func next_id(table) {
 
 // 客户存在性检查(护栏:挂单/记跟进前先验)
 func customer_exists(cid) {
-  return int(get(get(q("SELECT COUNT(*) AS n FROM customers WHERE id = ?", [cid]), 0, {}), "n", 0)) > 0;
+  return int(get(q("SELECT COUNT(*) AS n FROM customers WHERE id = ?", [cid]), 0, {}), "n", 0) > 0;
 }
 
 export func add_customer(name, company, email, phone) {
@@ -352,8 +352,8 @@ export func delete_customer(cid) {
   }
   return {
     ok: true, id: int(cid),
-    deals_deleted: int(get(rd, "ok", 0)),
-    activities_deleted: int(get(ra, "ok", 0)),
+    deals_deleted: int(rd, "ok", 0),
+    activities_deleted: int(ra, "ok", 0),
   };
 }
 
