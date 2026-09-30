@@ -64,6 +64,20 @@ nav.top a.active {
   font-weight: 600;
   text-decoration: none;
 }
+nav.top a.home-link {
+  margin-left: auto;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s;
+}
+nav.top a.home-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  text-decoration: none;
+}
 
 main.wrap {
   max-width: 1080px;

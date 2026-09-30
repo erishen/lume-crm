@@ -33,6 +33,14 @@ export function Nav(): React.ReactElement {
           {label}
         </a>
       ))}
+      <a
+        className="home-link"
+        href="https://erishen.cn/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        ← 回到 erishen.cn
+      </a>
     </nav>
   );
 }
