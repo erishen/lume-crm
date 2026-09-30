@@ -76,7 +76,7 @@ const SNIPPETS: { id: string; label: string; lang: string; code: string }[] = [
       'post "/api/notes", (req) => {',
       "  let b = try(() => json(req.body));          // 解析 JSON body",
       '  if (b.err != null) { return { status: 400, body: { err: "bad json" } }; }',
-      '  let body = str(get(b.ok, "body", ""));',
+      '  let body = str(b.ok, "body", "");',
       '  if (body == "") { return { status: 400, body: { err: "body 必填" } }; }',
       "  let id = next_id(\"notes\");",
       '  sql_write(db, "INSERT INTO notes (id, body, created) VALUES (?, ?, ?)",',
