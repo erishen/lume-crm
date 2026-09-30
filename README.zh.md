@@ -75,7 +75,7 @@ make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停
 镜像基于 `alpine:3.20`:自 lume **v0.5.1** 起官方提供 `*-static` 预编译二进制
 (`install.sh` 传 `LUME_STATIC=1` 拉取),该二进制把 libsqlite3 + 全部 libc 烤进
 自身,**零运行时依赖**——故镜像无需 `libsqlite3-0`、不要求特定 glibc 版本,基底
-可换 alpine,镜像从 120MB 砍到 ~10MB 级。前端 `www/` 是宿主 `make ui` 产出的纯
+可换 alpine,镜像从 120MB 砍到 ~18MB 级(线上镜像实测:alpine 基底 ~8.8MB + 静态二进制 ~3.8MB + curl/openssl 依赖)。前端 `www/` 是宿主 `make ui` 产出的纯
 静态包,直接 COPY。
 
 > DNS/出域说明(实测厘清):lume 的 LLM 调用是 fork + execlp 系统里的 `curl`

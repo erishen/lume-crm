@@ -4,7 +4,8 @@
 #
 # 瘦身来源: lume v0.5.1 起提供 *-static 预编译二进制(install.sh 传 LUME_STATIC=1
 #   拉取)。该二进制把 libsqlite3 + 全部 libc 烤进自身, **零运行时依赖**, 故基底
-#   可换 alpine(而非 debian/ubuntu), 镜像从 120MB 砍到 ~10MB 级。SQLite 自带,
+#   可换 alpine(而非 debian/ubuntu), 镜像从 120MB 砍到 ~18MB 级(实测: alpine
+#   基底 ~8.8MB + lume 静态二进制 ~3.8MB + curl/openssl 依赖)。SQLite 自带,
 #   不需要 libsqlite3, 也不要求特定 glibc 版本。
 #
 # DNS 说明(实测厘清, 修正早期"alpine DNS 坑"的过虑):

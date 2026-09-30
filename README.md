@@ -85,7 +85,8 @@ The image is based on `alpine:3.20`: since lume **v0.5.1** official `*-static`
 prebuilt binaries exist (fetch with `LUME_STATIC=1` via `install.sh`); that binary
 bakes libsqlite3 and all of libc into itself — **zero runtime dependencies** — so the
 image needs no `libsqlite3-0` and no specific glibc; the base can be alpine and the
-image shrank from ~120MB to ~10MB. The frontend `www/` is a pure static bundle
+image shrank from ~120MB to ~18MB (measured on the published image: alpine base
+~8.8MB + static binary ~3.8MB + curl/openssl deps). The frontend `www/` is a pure static bundle
 produced by host-side `make ui`, simply COPYed in.
 
 > DNS/egress notes (verified): lume's LLM calls fork + execlp the system `curl`
