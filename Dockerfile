@@ -28,7 +28,7 @@
 # ---- 拉静态二进制(builder, 用完即弃) ----
 FROM alpine:3.20 AS fetch
 RUN apk add --no-cache ca-certificates curl tar
-ARG LUME_VERSION=v0.5.1
+ARG LUME_VERSION=v0.6.0
 RUN curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh \
     | LUME_VERSION=${LUME_VERSION} LUME_STATIC=1 LUME_PREFIX=/usr/local sh
 
