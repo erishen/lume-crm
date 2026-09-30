@@ -128,6 +128,18 @@ post "/api/visit", (req) => {
   if (ip == "" or ip == null) {
     ip = get(req, "remote_addr", "");
   }
+  // 忽略列表(env LUME_CRM_IGNORE_IPS,逗号分隔公网 IP,如自己的代理出口):
+  // 命中则不写入统计。值仅来自服务端配置;拼判断前清洗空格与单引号。
+  if (ip != "" and ip != null) {
+    let ignore = env("LUME_CRM_IGNORE_IPS");
+    if (ignore != null and ignore != "") {
+      ignore = replace(replace(ignore, " ", ""), "'", "");
+      let needle = "," + ip + ",";
+      if (replace("," + ignore + ",", needle, "") != "," + ignore + ",") {
+        return { ok: true };
+      }
+    }
+  }
   crmdb.record_visit(path, referrer, ua, visitor, ip);
   return { ok: true };
 };

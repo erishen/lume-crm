@@ -265,6 +265,13 @@ export func visits_summary() {
   // (172.17.x)与内网段(10.x、192.168.x、172.16-31.x、169.254.x),同时滤掉
   // 历史无 IP 记录(NULL/空)。只统计公网真实访客。
   let priv = "ip IS NULL OR ip = '' OR ip LIKE '127.%' OR ip = '::1' OR ip LIKE '10.%' OR ip LIKE '192.168.%' OR ip LIKE '169.254.%' OR ip LIKE '172.16.%' OR ip LIKE '172.17.%' OR ip LIKE '172.18.%' OR ip LIKE '172.19.%' OR ip LIKE '172.2%.%' OR ip LIKE '172.30.%' OR ip LIKE '172.31.%'";
+  // 忽略列表(env LUME_CRM_IGNORE_IPS,逗号分隔公网 IP):与 priv 一起排除。
+  // 值与 priv 同为静态拼接,无用户输入;清洗空格/单引号后等值匹配。
+  let ignore = env("LUME_CRM_IGNORE_IPS");
+  if (ignore != null and ignore != "") {
+    ignore = replace(replace(ignore, " ", ""), "'", "");
+    priv = priv + " OR ip IN ('" + replace(ignore, ",", "','") + "')";
+  }
   let total = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
   let today = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE date(created,'unixepoch','localtime') = date('now','localtime') AND NOT (" + priv + ")", null), 0, {}), "n", 0);
   let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
