@@ -261,17 +261,21 @@ export func record_visit(path, referrer, ua, visitor, ip) {
 }
 
 export func visits_summary() {
-  let total = int(get(q("SELECT COUNT(*) AS n FROM visits_full", null), 0, {}), "n", 0);
-  let today = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE date(created,'unixepoch','localtime') = date('now','localtime')", null), 0, {}), "n", 0);
-  let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits_full", null), 0, {}), "n", 0);
+  // 本机/内网 IP 不计入统计:排除服务端本机回环(127.x/::1)、docker 网关
+  // (172.17.x)与内网段(10.x、192.168.x、172.16-31.x、169.254.x),同时滤掉
+  // 历史无 IP 记录(NULL/空)。只统计公网真实访客。
+  let priv = "ip IS NULL OR ip = '' OR ip LIKE '127.%' OR ip = '::1' OR ip LIKE '10.%' OR ip LIKE '192.168.%' OR ip LIKE '169.254.%' OR ip LIKE '172.16.%' OR ip LIKE '172.17.%' OR ip LIKE '172.18.%' OR ip LIKE '172.19.%' OR ip LIKE '172.2%.%' OR ip LIKE '172.30.%' OR ip LIKE '172.31.%'";
+  let total = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
+  let today = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE date(created,'unixepoch','localtime') = date('now','localtime') AND NOT (" + priv + ")", null), 0, {}), "n", 0);
+  let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
   let start = int(now()) - 13 * 86400;
   let days = [];
-  for (s in q("SELECT date(created,'unixepoch','localtime') AS d, COUNT(*) AS pv, COUNT(DISTINCT visitor) AS uv FROM visits_full WHERE created >= ? GROUP BY d ORDER BY d DESC LIMIT 14", [start])) {
+  for (s in q("SELECT date(created,'unixepoch','localtime') AS d, COUNT(*) AS pv, COUNT(DISTINCT visitor) AS uv FROM visits_full WHERE created >= ? AND NOT (" + priv + ") GROUP BY d ORDER BY d DESC LIMIT 14", [start])) {
     push(days, { d: s.d, pv: int(s.pv), uv: int(s.uv) });
   }
   // 最近访客(owner 查看"谁来过、从哪来":时间/IP/来源/页面/UA)
   let recent = [];
-  for (s in q("SELECT datetime(created,'unixepoch','localtime') AS t, ip, referrer, path, ua FROM visits_full ORDER BY id DESC LIMIT 20", null)) {
+  for (s in q("SELECT datetime(created,'unixepoch','localtime') AS t, ip, referrer, path, ua FROM visits_full WHERE NOT (" + priv + ") ORDER BY id DESC LIMIT 20", null)) {
     push(recent, { t: s.t, ip: s.ip, referrer: s.referrer, path: s.path, ua: s.ua });
   }
   return { total: total, today: today, uv: uv, days: days, recent: recent };
