@@ -2,7 +2,7 @@
 #
 #   make          类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停) → :8089
 #   make dev      同 make(别名,与 lume 主仓 make dev 习惯对齐)
-#   make ui       只构建前端(esbuild → www/app.js + 共享 chunk)
+#   make ui       只构建前端(esbuild → www/app.js 单入口 bundle)
 #   make check    只跑 Lume 类型检查(crm.lume + src/db.lume)
 #   make watch    前端 esbuild --watch(另开终端跑 make 或 lume)
 #   make crm-dev  check + 起服务 + 前端 watch 联动(Ctrl-C 全停)
@@ -16,8 +16,8 @@
 #
 # Lume:用 release 版本(不再依赖源码树 ../lume)。安装:
 #   curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh | sh
-# 二进制落在 ~/.local/bin/lume;CRM 用到的 DSL 特性需 lume >= v0.5.0,建议固定
-# 版本安装:LUME_VERSION=v0.5.0 sh install.sh。可用 LUME 环境变量覆盖。
+# 二进制落在 ~/.local/bin/lume;CRM 用到的 DSL 特性需 lume >= v0.5.1,建议固定
+# 版本安装:LUME_VERSION=v0.5.1 sh install.sh。可用 LUME 环境变量覆盖。
 #
 # 前端 esbuild:优先 ./node_modules/.bin/esbuild(CRM 本地 npm install 后),
 # 其次 PATH 上的 esbuild,最后兜底 ../lume/frontend/node_modules(过渡用)。
@@ -38,7 +38,8 @@ check:
 	@$(LUME) --check crm.lume
 
 # ------------------------------------------------ ui: esbuild 构建前端产物
-# 共享 React chunk 落 docroot 根(www/chunk-*.js),入口 bundle 落 www/app.js。
+# 入口 bundle 落 www/app.js(单入口,当前无共享 chunk;若日后拆多入口,
+# --splitting 才会产出 www/chunk-*.js)。
 # 实际构建交给 build.sh(集中处理 esbuild 解析与 watch 参数)。
 ui:
 	@sh build.sh

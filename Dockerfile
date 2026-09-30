@@ -16,10 +16,11 @@
 #   curl 是真实 LLM 的硬依赖(alpine 基础镜像不带, 必须显式安装)。
 #
 # 前端: www/ 是宿主 make ui 产出的纯静态单页, 直接 COPY, 容器里不重编。
-# 鉴权: server{} 的 htpasswd = env("HTPASSWD_FILE"); 本地留空=无认证。公网部署
-#   必须在反向代理层(nginx/caddy)做 Basic Auth + TLS —— lume 发布版只对内置路由
-#   强制鉴权, 自定义 /api/* 不挡。容器内仍可用 LUME_AUTH_PASSWORD 生成 $6$ 哈希
-#   作纵深防御。
+# 鉴权: server{} 的 htpasswd = env("HTPASSWD_FILE"); 本地留空=无认证。lume 的
+#   Basic Auth 门是全局的——自定义 /api/* 与内置路由同一道前置门,无/错凭据一律
+#   401(fail-closed)。entrypoint 设 LUME_AUTH_PASSWORD 会现场生成 $6$ htpasswd
+#   并 export HTPASSWD_FILE;不 export 鉴权会静默关闭(踩过的坑,见 README)。
+#   公网仍建议反向代理层(nginx/caddy) TLS 必配, Basic Auth 作纵深防御。
 # bind: 本地 127.0.0.1; 容器传 LUME_BIND=0.0.0.0 才能被 -p 端口映射命中。
 # ============================================================================
 

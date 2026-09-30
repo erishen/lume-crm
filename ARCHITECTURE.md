@@ -95,7 +95,7 @@ through every layer — this is what makes an unauthenticated public demo safe:
 | Agent tool registry (`db.lume`) | the 8 write tools are **never registered** | prompt injection has no destructive surface to call — nothing to jailbreak |
 | REST API (`crm.lume`) | every write endpoint 403s | curl-level abuse hits a wall |
 | Native tools (container entrypoint) | `HARNESS_TOOLS_ALLOW` trimmed | chat agent loses `read_file`/`fetch_url` — no file-read or outbound channels |
-| Frontend (`chat.tsx`) | `LOCAL` hostname check | query-only quick prompts / greeting / subtitle on public; write-type entries appear only on localhost dev |
+| Frontend (`ui.tsx` `IS_LOCAL`) | localhost/127.0.0.1 hostname check | every write control hidden on public — dashboard new-customer form, customers add-deal / edit / delete / stage-select / activity forms, chat write quick prompts; localhost dev keeps full UI |
 
 Verified A/B: writable + injected "delete the
 customer" → really deletes; read-only + same injection → agent has no delete

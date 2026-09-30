@@ -25,7 +25,8 @@
 
 <https://lume-crm.erishen.cn> 以 `LUME_CRM_READONLY=1` 运行:写 API 全部 403,
 Agent 只注册查询类工具(`crm_search_customers` / `crm_get_customer`),前端也
-只展示查询入口(写类快捷问法/示例仅在本地 localhost 开发时出现)。聊天页内置
+**隐藏全部写 UI**——仪表盘新建客户表单、客户页加商机/编辑资料/删除/推进管道/
+记跟进等表单与按钮、以及写类快捷问法,都只在本地 localhost 开发时出现。聊天页内置
 `crm_*` 快捷问法 chips(点按直发)与 markdown 表格渲染;另含「用 Lume 开发」
 教学页(`/examples`,五段可复制的 `.lume` DSL 片段)与全站页脚
 ([开源仓](https://github.com/erishen/lume) +
@@ -112,8 +113,10 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 - **只读演示模式(公网推荐, compose 默认开)**:`LUME_CRM_READONLY=1` 时全部写 API
   统一 403,且 Agent **只注册查询类工具**(8 个增删改工具不进注册表)——提示注入
   再狠也没有可调用的破坏面,故**无需鉴权即可安全公网演示**:访客能看全部数据、
-  能跟真模型聊天,但玩不坏。已实测 A/B:可写+注入"删除客户"→ 真删;只读+同款
-  注入 → Agent 无删除工具可调,数据完好。本地开发不设该变量 = 完全可写。
+  能跟真模型聊天,但玩不坏。前端在非 localhost 下同步隐藏全部写 UI
+  (`ui.tsx` 的 `IS_LOCAL`),访客看不到提交必 403 的表单。已实测 A/B:可写+注入
+  "删除客户"→ 真删;只读+同款注入 → Agent 无删除工具可调,数据完好。
+  本地开发不设该变量 = 完全可写。
 - **公网鉴权(实测厘清)**:lume 的 Basic Auth 门是**全局的**——自定义 `/api/*`
   与内置路由同一道前置门(`http.c`/`event.c` 在路由分发前校验),无/错凭据一律
   401(fail-closed)。容器设 `LUME_AUTH_USER` + `LUME_AUTH_PASSWORD`,entrypoint
@@ -155,7 +158,7 @@ src/crm/app.tsx   SPA shell:history 路由(pushState) + 统一 Nav + 挂载四�
 src/crm/*.tsx     视图组件(dashboard/customers/chat/examples,均 export,不自行挂载)
 www/app.css       手写共享样式(静态源,不走构建)
 www/index.html    SPA 壳(spa=true 的回退目标,加载 /app.js)
-www/app.js + www/chunk-*.js   esbuild 产物(已入库;改 src/crm 后须 make ui 重建并一并提交)
+www/app.js   esbuild 产物(单入口 bundle,已入库;改 src/crm 后须 make ui 重建并一并提交)
 .data/crm.db      SQLite 数据(首次运行自动建表 + 注入种子数据;种子为虚构演示数据)
 ```
 

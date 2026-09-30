@@ -26,8 +26,10 @@ English | [简体中文](README.zh.md)
 
 <https://lume-crm.erishen.cn> runs with `LUME_CRM_READONLY=1`: every write API returns
 403, the agent only registers the two query tools (`crm_search_customers` /
-`crm_get_customer`), and the UI only exposes query entries (write-type quick prompts
-and examples appear only when developing on localhost). The chat page ships
+`crm_get_customer`), and the UI hides every write control — the dashboard
+new-customer form, the customers add-deal / edit / delete / stage-select /
+activity forms, and write-type quick prompts appear only when developing on
+localhost. The chat page ships
 quick-prompt chips for the `crm_*` tools (click to send) and renders markdown tables.
 It also includes the "Build with Lume" teaching page (`/examples`, five
 copy-pasteable `.lume` DSL snippets) and a site-wide footer
@@ -133,7 +135,9 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   query tools** (the 8 write tools never enter the registry) — no matter how nasty
   the prompt injection, there is no destructive surface to call, so it is **safe to
   demo on the public internet without auth**: visitors can see all data and chat
-  with a real model, but cannot break anything. Verified A/B: writable + injection
+  with a real model, but cannot break anything. The frontend hides every write
+  control on non-localhost (`ui.tsx` `IS_LOCAL`), so visitors never see forms that
+  would 403 on submit. Verified A/B: writable + injection
   of "delete the customer" → really deletes; read-only + same injection → agent has
   no delete tool to call, data intact. Local development without the variable =
   fully writable.
@@ -184,7 +188,7 @@ src/crm/app.tsx   SPA shell: history routing (pushState) + unified Nav + mounts 
 src/crm/*.tsx     view components (dashboard/customers/chat/examples, all exported, never self-mounting)
 www/app.css       handwritten shared styles (static source, not built)
 www/index.html    SPA shell (spa=true fallback target, loads /app.js)
-www/app.js + www/chunk-*.js   esbuild output (tracked; after touching src/crm, rebuild with make ui and commit together)
+www/app.js   esbuild output, single-entry bundle (tracked; after touching src/crm, rebuild with make ui and commit together)
 .data/crm.db      SQLite data (auto schema + seed on first run; seed rows are fictional demo data)
 ```
 
