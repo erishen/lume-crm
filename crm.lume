@@ -140,6 +140,30 @@ post "/api/visit", (req) => {
       }
     }
   }
+  // 爬虫 UA 不入库(常见搜索引擎/AI 爬虫)。DSL 暂无 lower/contains,
+  // 用 replace 做字面量包含判断,故大小写各列一个变体;查询层另有
+  // SQLite LIKE 兜底过滤历史数据(LIKE 对 ASCII 不区分大小写)。
+  let bots = [
+    "Googlebot", "googlebot", "GoogleOther", "googleother",
+    "Baiduspider", "baiduspider", "Bingbot", "bingbot",
+    "YandexBot", "yandexbot", "DuckDuckBot", "duckduckbot",
+    "PetalBot", "petalbot", "Bytespider", "bytespider",
+    "SemrushBot", "semrushbot", "AhrefsBot", "ahrefsbot",
+    "MJ12bot", "mj12bot", "Sogou", "sogou", "360Spider", "360spider",
+    "ia_archiver", "archive.org_bot", "GPTBot", "gptbot",
+    "ChatGPT-User", "chatgpt-user", "CCBot", "ccbot",
+    "Applebot", "applebot", "ClaudeBot", "claudebot",
+    "facebookexternalhit", "Twitterbot", "twitterbot",
+    "LinkedInBot", "linkedinbot", "Pinterest", "pinterest",
+    "TelegramBot", "telegrambot", "WhatsApp", "whatsapp"
+  ];
+  if (ua != "" and ua != null) {
+    for (b in bots) {
+      if (replace(ua, b, "") != ua) {
+        return { ok: true };
+      }
+    }
+  }
   crmdb.record_visit(path, referrer, ua, visitor, ip);
   return { ok: true };
 };

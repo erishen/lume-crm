@@ -272,6 +272,12 @@ export func visits_summary() {
     ignore = replace(replace(ignore, " ", ""), "'", "");
     priv = priv + " OR ip IN ('" + replace(ignore, ",", "','") + "')";
   }
+  // 爬虫 UA 不计入统计(常见搜索引擎/AI 爬虫;SQLite LIKE 对 ASCII 不区分
+  // 大小写,Googlebot/googlebot 等变体都能命中),同时排除无 UA 记录(与无
+  // IP 同理,参考价值低)。与 priv/ignore 一起排除,历史已入库的爬虫记录
+  // 也被过滤,统计只剩真人访问。
+  let bots = "ua IS NULL OR ua = '' OR ua LIKE '%googlebot%' OR ua LIKE '%googleother%' OR ua LIKE '%bingbot%' OR ua LIKE '%baiduspider%' OR ua LIKE '%yandexbot%' OR ua LIKE '%duckduckbot%' OR ua LIKE '%petalbot%' OR ua LIKE '%bytespider%' OR ua LIKE '%semrushbot%' OR ua LIKE '%ahrefsbot%' OR ua LIKE '%mj12bot%' OR ua LIKE '%sogou%' OR ua LIKE '%360spider%' OR ua LIKE '%ia_archiver%' OR ua LIKE '%archive.org_bot%' OR ua LIKE '%gptbot%' OR ua LIKE '%chatgpt-user%' OR ua LIKE '%ccbot%' OR ua LIKE '%applebot%' OR ua LIKE '%claudebot%' OR ua LIKE '%facebookexternalhit%' OR ua LIKE '%twitterbot%' OR ua LIKE '%linkedinbot%' OR ua LIKE '%pinterest%' OR ua LIKE '%telegrambot%' OR ua LIKE '%whatsapp%'";
+  priv = priv + " OR " + bots;
   let total = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
   let today = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE date(created,'unixepoch','localtime') = date('now','localtime') AND NOT (" + priv + ")", null), 0, {}), "n", 0);
   let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
