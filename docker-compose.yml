@@ -1,15 +1,18 @@
 # lume-crm 容器编排
 #
-# 本地验证:  docker compose up --build  → http://127.0.0.1:11080 (无认证)
-# 公网部署(lume-crm.erishen.cn): 用下面的 ports 改绑 127.0.0.1 交给反代,
-#   并务必开启认证(取消 LUME_AUTH_* / HTPASSWD_FILE 注释 + 强密码),
-#   外层用 nginx/caddy 做反代 + TLS(见部署说明)。
+# 本地验证:  HOST_PORT=11080 docker compose up --build  → http://127.0.0.1:11080 (无认证)
+# 公网部署(lume-crm.erishen.cn): HOST_PORT=8089(默认),反代指向 127.0.0.1:8089;
+#   Basic Auth 放在 nginx/caddy 层(并给 /share/ 例外);不要开容器内
+#   LUME_AUTH_*/HTPASSWD_FILE——lume v0.8.1 的 Basic 是全局的,会把公开
+#   分享页也变成 401。外层反代负责 TLS(见部署说明)。
 services:
   crm:
     build: .
     image: lume-crm:latest
     ports:
-      - "11080:8089"          # 本地验证(宿主侧 >10000 且非 Chrome 受限端口); 公网改为 "127.0.0.1:11080:8089"
+      # 默认只绑 127.0.0.1, 由 VPS 上 Nginx 反代(见 deploy/ + docs/HARDENING.md),
+      # 端口绝不对外直开。需本机/局域网直接访问时用 HOST_BIND=0.0.0.0 覆盖。
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8089}:8089"
     environment:
       LUME_BIND: "0.0.0.0"     # 容器内需 0.0.0.0 才能被端口映射命中
       # ---- 真实 LLM(OpenAI 兼容; 不配 LLM_API_KEY/LLM_API_URL 则聊天走离线演示引擎) ----
@@ -17,18 +20,34 @@ services:
       # (gitignored), compose 用 ${VAR} 变量替换注入, 示例:
       #   LLM_API_URL=http://host.docker.internal:<port>/v1/chat/completions
       #   LLM_MODEL=auto / LLM_API_KEY=<网关签发的 key>
-      # host.docker.internal 由 musl curl 解析, alpine 下可用。
-      LLM_API_URL: "${LLM_API_URL:-}"
+      # 容器内访问宿主机网关用 LLM_API_URL_DOCKER(host.docker.internal);
+      # 原生 `make dev` 继续用 LLM_API_URL。两者都留空 = 离线演示引擎。
+      LLM_API_URL: "${LLM_API_URL_DOCKER:-${LLM_API_URL:-}}"
       LLM_MODEL: "${LLM_MODEL:-auto}"
       LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-60}"
       # ---- 只读演示模式(公网推荐, 默认开) ----
       # 写 API 全部 403 + Agent 只注册查询类工具(注入也无破坏面), 无鉴权也可公网演示。
       # 本地开发想可写: 注释掉这行, 或 `LUME_CRM_READONLY= docker compose up`。
       LUME_CRM_READONLY: "1"
-      # ---- 公网部署可选(要可写演示才需要; 只读模式下无需鉴权) ----
+      # ---- 容器内 Basic Auth(不要与公开分享同时开) ----
+      # lume v0.8.1 的 Basic 是全局的,开了连 /share/ 也要登录;
+      # 公网分享场景请只用反代层 Basic,保持这里注释。
       # LUME_AUTH_USER: "admin"
       # LUME_AUTH_PASSWORD: "改成强密码"
       # HTPASSWD_FILE: "/app/auth/htpasswd"
+      # ---- 访客统计 PIN(见 docs/HARDENING.md §3): 公网务必 >=32 hex 随机 ----
+      #      生成: openssl rand -hex 32,写入同目录 .env;只读模式下不配则 /api/visits 一律 403 ----
+      LUME_CRM_VISIT_PIN: "${LUME_CRM_VISIT_PIN:-}"
+      # ---- 分享页防枚举 salt(见 docs/HARDENING.md §4): 建议 openssl rand -hex 32；
+      #      不配则回退用 LUME_CRM_VISIT_PIN 派生,两者都无 → /share/* 一律 404 ----
+      LUME_CRM_SHARE_SALT: "${LUME_CRM_SHARE_SALT:-}"
+      # 分享链接 TTL(天): 默认 30;0 = 不过期(不推荐)。撤销后立即失效。
+      LUME_CRM_SHARE_TTL_DAYS: "${LUME_CRM_SHARE_TTL_DAYS:-30}"
+      # 分享页是否显示内部跟进 note: 默认 0=隐藏;仅内部演示可设 1。
+      LUME_CRM_SHARE_INCLUDE_INTERNAL: "${LUME_CRM_SHARE_INCLUDE_INTERNAL:-0}"
+      # 访客明细保留期(天): 默认 90;0 = 不自动清理(不推荐)。
+      LUME_CRM_VISIT_RETENTION_DAYS: "${LUME_CRM_VISIT_RETENTION_DAYS:-90}"
     volumes:
       - crm_data:/app/.data    # SQLite 持久化
     restart: unless-stopped

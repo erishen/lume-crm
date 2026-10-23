@@ -5,7 +5,10 @@
 //
 // 安全:客户姓名/公司/邮箱/电话/商机标题/跟进 note 全部经 html() 的 {N} 标量槽
 // 输出——槽内标量自动转义,客户字段里藏 <script> 也不会被执行(存储型 XSS 不可行,
-// 有实测断言)。页面自包含 CSS,零外部依赖,GET-only,天然适配只读演示模式。
+// 有实测断言)。跟进 note 默认不对分享对象展示(内部备注),需显式 env 才恢复。
+// 页面自包含 CSS、零子资源,GET-only,天然适配只读演示模式。
+// 分享 URL 含 token,故 head 加 no-referrer,避免 Referer 把 token 带到外链/日志;
+// 页面含 PII,再加 robots noindex/noarchive,配合路由响应头的 Cache-Control/X-Robots-Tag。
 
 // 商机行:标题 / 阶段徽章 / 金额(全部标量槽转义)
 func deal_row(d) {
@@ -16,19 +19,27 @@ func deal_row(d) {
     + "</tr>", str(d.title), str(d.stage), str(d.amount));
 }
 
-// 跟进项:类型徽章 / note / 时间
-func act_item(a) {
+// 跟进项:类型徽章 / note / 时间。note 属内部跟进信息,默认不对外。
+func act_item(a, show_internal) {
+  let note = "内部备注已隐藏";
+  let cls = "note muted";
+  if (show_internal) {
+    note = str(a, "note", "");
+    cls = "note";
+  }
   return html("<li>"
     + "<span class='kind'>{0}</span>"
-    + "<span class='note'>{1}</span>"
-    + "<time>{2}</time>"
-    + "</li>", str(a.kind), str(a.note), str(a.at_fmt));
+    + "<span class='{1}'>{2}</span>"
+    + "<time>{3}</time>"
+    + "</li>", str(a.kind), cls, note, str(a.at_fmt));
 }
 
 // 分享页壳:全档数据一次渲染。c 是 crmdb.customer_by_id(id) 的返回(稀疏)。
-export func share_page(c) {
+// show_internal=false 时只展示跟进类型/时间,不展示内部 note。
+export func share_page(c, show_internal) {
+  let show = show_internal == true;
   let deal_rows = map((d) => deal_row(d), get(c, "deals", []));
-  let acts = map((a) => act_item(a), get(c, "activities", []));
+  let acts = map((a) => act_item(a, show), get(c, "activities", []));
   let deal_empty = [];
   if (len(deal_rows) == 0) {
     deal_empty = [html("<tr><td colspan='3' class='empty'>暂无商机</td></tr>")];
@@ -41,6 +52,8 @@ export func share_page(c) {
     + "<html lang='zh-CN'><head>"
     + "<meta charset='utf-8'>"
     + "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    + "<meta name='referrer' content='no-referrer'>"
+    + "<meta name='robots' content='noindex,nofollow,noarchive'>"
     + "<title>{0} · Lume CRM</title>"
     + "<style>"
     + ":root{color-scheme:light}"
@@ -68,8 +81,10 @@ export func share_page(c) {
     + ".kind{flex:none;background:#ecfdf5;color:#059669;padding:2px 10px;"
     + "border-radius:99px;font-size:12px}"
     + ".note{flex:1}"
+    + ".muted{color:#9ca3af;font-style:italic}"
     + "time{flex:none;color:#9ca3af;font-size:12px}"
     + ".empty{color:#9ca3af;text-align:center;padding:16px 0}"
+    + ".notice{text-align:center;color:#6b7280;font-size:13px;padding:8px 0}"
     + "footer{text-align:center;color:#9ca3af;font-size:13px;padding:8px 0 24px}"
     + "footer a{color:#4f6ef7;text-decoration:none}"
     + "</style></head><body><div class='wrap'>"
@@ -82,7 +97,8 @@ export func share_page(c) {
     + "<section><h2>商机 Pipeline</h2>"
     + "<table>{4}{5}</table></section>"
     + "<section><h2>跟进记录</h2><ul>{6}{7}</ul></section>"
-    + "<footer>由 <a href='https://github.com/erishen/lume'>lume</a> 单二进制"
+    + "<p class='notice'>本页含客户资料，仅限授权查看；请勿公开转发。</p>"
+    + "<footer>由 <a href='https://github.com/erishen/lume' rel='noopener noreferrer'>lume</a> 单二进制"
     + " C11 后端渲染 · 数据于服务端 SSR,本页零 JavaScript</footer>"
     + "</div></body></html>",
     str(c.name), str(c, "company", ""),

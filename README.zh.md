@@ -65,8 +65,8 @@ make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停
 
 依赖:Lume 用 **release 版本**(不再依赖源码树 `../lume`)。安装:
 `curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh | sh`
-(二进制落在 `~/.local/bin/lume`;CRM 用到的 DSL 特性需 `lume >= v0.5.1`,安装时
-建议固定版本 `LUME_VERSION=v0.5.1 sh install.sh`)。前端 esbuild 优先用本目录
+(二进制落在 `~/.local/bin/lume`;CRM 用到的 DSL 特性需 `lume >= v0.8.1`,安装时
+建议固定版本 `LUME_VERSION=v0.8.1 sh install.sh`)。前端 esbuild 优先用本目录
 `npm install` 后的 `./node_modules/.bin/esbuild`,其次 PATH,最后兜底
 `../lume/frontend/node_modules`(过渡);React 同样由 node_modules 解析。
 
@@ -88,7 +88,7 @@ make                 # 类型检查 + 构建前端 + 起服务(阻塞,Ctrl-C 停
 ```bash
 make ui                   # 先构建前端(产出 www/app.js)
 docker build -t lume-crm:latest .
-docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
+docker run -d -p 127.0.0.1:8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 # → http://localhost:8089
 ```
 
@@ -98,9 +98,20 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   LLM 网关,如 `host.docker.internal:<port>/v1/chat/completions`)+ `LLM_MODEL=auto`;
   URL/key 都不写死缺省——放同目录 `.env`(gitignored),compose 经 `${VAR}` 变量
   替换注入。任一不配则聊天回落离线演示引擎。
-- **SSR 客户分享页**:`GET /share/customer?id=<n>` 纯服务端渲染(el/html 组件,
-  零 JavaScript,自包含 CSS),可直接外发链接展示单个客户全档(商机/跟进)。
-  客户字段全部经 `html()` 标量槽输出——自动转义,存储型 XSS 不可行(有实测)。
+- **SSR 客户分享页**:`GET /share/customer?id=<n>&token=<t>` 纯服务端渲染
+  (el/html 组件,零 JavaScript,自包含 CSS),可直接外发链接展示单个客户的
+  对外档案(商机/跟进类型与时间;内部跟进 note 默认隐藏)。`token` 由
+  `salt + 客户 id + version` 派生,并与 `share_links` 表校验,连续 id 无法枚举;
+  缺失/错误/过期/已撤销 token 一律 404。链接默认
+  `LUME_CRM_SHARE_TTL_DAYS=30` 天过期;每客户可用
+  `POST /api/share/create|revoke` 轮换/撤销,成功打开更新 `last_access`。
+  老版 `sha256(salt:id)` 链接首次访问会迁移落库,撤销前继续可用。客户字段全部
+  经 `html()` 标量槽输出——自动转义,存储型 XSS 不可行(有实测)。
+  仅内部演示需要展示跟进 note 时才设 `LUME_CRM_SHARE_INCLUDE_INTERNAL=1`。
+  > **公开分享与鉴权**:lume 的 `HTPASSWD_FILE` / `LUME_AUTH_PASSWORD` 在
+  > v0.8.1 是全局门,连 `/share/` 也会 401。要公开分享就把 Basic Auth 放在
+  > 反代层并给 `/share/` 例外,不要两层同时开(见 `docs/HARDENING.md` §4)。
+  >
   > **C SSR vs React SSR**:lume 另支持 React SSR——`server{ react_socket }` 把
   > `/react/*` FastCGI relay 到常驻 node 进程(react-dom/server + StaticRouter +
   > hydration),见 `examples/react-ssr.lume`。本 CRM **刻意不用**它:接 node 常驻
@@ -145,6 +156,10 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 
   - `.env.example` 是**惰性**的:lume 只认字面 `".env"`,不认 `.env.example`,镜像里无害。
   - `LUME_BIND` / `LUME_AUTH_PASSWORD` 同样走 `-e` 或挂载的 `/app/.env`。
+  - 隐私参数:`LUME_CRM_SHARE_TTL_DAYS`(默认 30 天,`0`=不过期)、
+    `LUME_CRM_VISIT_RETENTION_DAYS`(默认 90 天,`0`=永久保留)、
+    `LUME_CRM_SHARE_INCLUDE_INTERNAL`(默认 `0`;`1` 才在分享页显示跟进 note)。
+    详见 `docs/HARDENING.md` §4/§6。
   - 想让容器内聊天走真实 LLM:二选一即可——`docker run -e LLM_API_URL=...`
     (优先级更高),或挂一份生产 `.env` 到 `/app/.env`(lume 自己加载)。
 
@@ -178,6 +193,8 @@ www/app.js   esbuild 产物(单入口 bundle,已入库;改 src/crm 后须 make u
 | `POST /api/customers/delete` | 删客户 + 级联清其名下商机/跟进 `{customer_id}`(级联三步逐步校验,不可撤销) |
 | `POST /api/deals/delete` | 删一条商机 `{deal_id}`(误挂/重复录入的清理) |
 | `POST /api/activities/delete` | 删一条跟进 `{activity_id}`(系统自动留痕不建议删,服务端不禁止) |
+| `POST /api/share/create` | 生成/轮换分享链接 `{customer_id}`;旧链接立即失效,返回 `share_token/share_expires`(只写 `share_links`,只读模式也可用) |
+| `POST /api/share/revoke` | 撤销该客户全部有效分享链接 `{customer_id}`(只写 `share_links`) |
 | `POST /react/api/chat` | Agent SSE(框架原生,`crm_*` 工具已注册) |
 
 ## Agent 工具(聊天页可用)

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # ============================================================================
 # lume-crm —— 单镜像 CRM 应用 (lume 静态单二进制 + 预编译前端 + 原生 SQLite)。
 #
@@ -21,15 +20,17 @@
 #   Basic Auth 门是全局的——自定义 /api/* 与内置路由同一道前置门,无/错凭据一律
 #   401(fail-closed)。entrypoint 设 LUME_AUTH_PASSWORD 会现场生成 $6$ htpasswd
 #   并 export HTPASSWD_FILE;不 export 鉴权会静默关闭(踩过的坑,见 README)。
-#   公网仍建议反向代理层(nginx/caddy) TLS 必配, Basic Auth 作纵深防御。
+#   公网 Basic Auth 放在反向代理层(nginx/caddy, TLS 必配);不要在容器内
+#   同时开 LUME_AUTH_PASSWORD/HTPASSWD_FILE——lume v0.8.1 的 Basic 是全局的,
+#   会把公开的 /share/ 也拦成 401。
 # bind: 本地 127.0.0.1; 容器传 LUME_BIND=0.0.0.0 才能被 -p 端口映射命中。
 # ============================================================================
 
 # ---- 拉静态二进制(builder, 用完即弃) ----
 FROM alpine:3.20 AS fetch
 RUN apk add --no-cache ca-certificates curl tar
-ARG LUME_VERSION=v0.6.1
-RUN curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh \
+ARG LUME_VERSION=v0.8.1
+RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/${LUME_VERSION}/install.sh" \
     | LUME_VERSION=${LUME_VERSION} LUME_STATIC=1 LUME_PREFIX=/usr/local sh
 
 # ---- 运行时(alpine, 极小) ----

@@ -21,6 +21,179 @@ let crm_lock_path = ".data/.crm.lock";   // 不能与 crm_lock() 同名
 // crm.lume 用同一开关 403。默认不设 = 完全可写(本地/开发)。
 let crm_readonly = env("LUME_CRM_READONLY") == "1";
 
+// ------------------------------------------------ 分享页防枚举(share token)
+// token = substr(sha256(salt + ":" + id [+ ":" + version]), 0, 32)。
+// 链接元数据(版本/过期/撤销/最后访问)落 share_links;DSL 没有 CSPRNG,
+// 但 salt 保密时无法为任意 id 伪造 → /share/customer?id=N 直接枚举失效。
+// version=0 保留老链接兼容;重新生成时 version+1,旧 token 立即失效。
+// salt 取值优先级:
+//   1. LUME_CRM_SHARE_SALT(>=16 字符,建议 `openssl rand -hex 32`)。
+//   2. 回退 LUME_CRM_VISIT_PIN 派生(兼容已上线、只配了 PIN 的演示)。
+//   3. 都没有 → share_token() 返回 "" → 路由一律 404(fail closed)。
+// 注意:变量名不能含 SECRET/TOKEN/KEY,否则被 lume 的 env() 按未设置屏蔽。
+let share_salt = env("LUME_CRM_SHARE_SALT");
+if (share_salt == null or len(share_salt) < 16) {
+  let share_pin = env("LUME_CRM_VISIT_PIN");
+  if (share_pin != null and len(share_pin) >= 16) {
+    share_salt = "visit-pin:" + share_pin;
+  } else {
+    share_salt = "";
+  }
+}
+
+export func share_token(cid) {
+  if (share_salt == "") {
+    return "";
+  }
+  return substr(sha256(share_salt + ":" + str(cid)), 0, 32);
+}
+
+// 分享链接 TTL:默认 30 天;0 = 不过期(不推荐)。env 只接受纯十进制,
+// 非法值回退默认,避免 typo 静默变成"永不过期"。
+let share_ttl_days = 30;
+let share_ttl_raw = env("LUME_CRM_SHARE_TTL_DAYS");
+if (share_ttl_raw != null and share_ttl_raw != "") {
+  let n = int(share_ttl_raw);
+  if (n >= 0 and str(n) == share_ttl_raw) {
+    share_ttl_days = n;
+  }
+}
+let share_ttl_sec = share_ttl_days * 86400;
+
+// 访客数据保留期:默认 90 天;0 = 不自动清理(不推荐)。
+let visit_retention_days = 90;
+let visit_retention_raw = env("LUME_CRM_VISIT_RETENTION_DAYS");
+if (visit_retention_raw != null and visit_retention_raw != "") {
+  let n = int(visit_retention_raw);
+  if (n >= 0 and str(n) == visit_retention_raw) {
+    visit_retention_days = n;
+  }
+}
+let visit_last_cleanup = 0;
+
+// 分享链接落库:token、过期时间、撤销标记、最后访问。token 仍是派生
+// (salt + customer + version),version 递增即可让旧链接失效;DSL 没有
+// CSPRNG,但 salt 保密时伪造/枚举不可行。version=0 保留老链接兼容。
+export func create_share_link(cid) {
+  if (share_salt == "") {
+    return null;
+  }
+  let maxv = q("SELECT COALESCE(MAX(version), -1) AS v FROM share_links WHERE customer = ?", [cid]);
+  let version = int(get(maxv, 0, {}), "v", -1) + 1;
+  let token = "";
+  if (version == 0) {
+    token = share_token(cid);
+  } else {
+    token = substr(sha256(share_salt + ":" + str(cid) + ":" + str(version)), 0, 32);
+  }
+  if (token == "") {
+    return null;
+  }
+  let ts = int(now());
+  let expires = 0;
+  if (share_ttl_sec > 0) {
+    expires = ts + share_ttl_sec;
+  }
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO share_links (customer, version, token, created, expires, revoked, last_access) VALUES (?, ?, ?, ?, ?, 0, 0)",
+    [cid, version, token, ts, expires]));
+  if (r.err != null) {
+    print("分享链接写入失败: " + r.err);
+    return null;
+  }
+  return { customer: cid, version: version, token: token, created: ts, expires: expires, revoked: 0, last_access: 0 };
+}
+
+// 当前有效链接:有 active 返回;该客户从未建过链接则自动建 version=0
+// (兼容老链接);已有 history 但全部过期/撤销 → 返回 null,不自动复活。
+export func active_share_link(cid) {
+  let ts = int(now());
+  let rs = q("SELECT id, customer, version, token, created, expires, revoked, last_access"
+    + " FROM share_links WHERE customer = ? AND revoked = 0"
+    + " AND (expires = 0 OR expires > ?) ORDER BY version DESC, id DESC LIMIT 1", [cid, ts]);
+  if (len(rs) > 0) {
+    return get(rs, 0, {});
+  }
+  let any = q("SELECT COUNT(*) AS n FROM share_links WHERE customer = ?", [cid]);
+  if (int(get(any, 0, {}), "n", 0) == 0) {
+    return create_share_link(cid);
+  }
+  return null;
+}
+
+// 校验 token;命中则更新 last_access(失败不影响页面,只打日志)。
+// 老链接兼容:该客户还没有 share_links 行时,允许原 sha256(salt:id) token
+// 一次性落库;一旦撤销/过期,旧 token 不会再次复活。
+export func share_link_by_token(cid, token) {
+  let ts = int(now());
+  let rs = q("SELECT id, customer, version, token, created, expires, revoked, last_access"
+    + " FROM share_links WHERE customer = ? AND token = ? AND revoked = 0"
+    + " AND (expires = 0 OR expires > ?) LIMIT 1", [cid, token, ts]);
+  if (len(rs) > 0) {
+    let link = get(rs, 0, {});
+    let r = try(() => sql_write(crm_db, "UPDATE share_links SET last_access = ? WHERE id = ?", [ts, link.id]));
+    if (r.err != null) {
+      print("分享访问记录失败: " + r.err);
+    }
+    return link;
+  }
+  if (share_salt != "" and token == share_token(cid)) {
+    let any = q("SELECT COUNT(*) AS n FROM share_links WHERE customer = ?", [cid]);
+    if (int(get(any, 0, {}), "n", 0) == 0) {
+      return create_share_link(cid);
+    }
+  }
+  return null;
+}
+
+// 撤销该客户当前所有有效链接;再次分享需显式 create(version+1)。
+export func revoke_share_links(cid) {
+  let r = try(() => sql_write(crm_db,
+    "UPDATE share_links SET revoked = 1 WHERE customer = ? AND revoked = 0", [cid]));
+  if (r.err != null) {
+    print("分享链接撤销失败: " + r.err);
+    return false;
+  }
+  return true;
+}
+
+// 历史 visit referrer 清洗:老版本存了完整 URL,可能含第三方 token/搜索词。
+func scrub_visit_referrers() {
+  for (t in ["visits_full", "visits"]) {
+    let rs = q("SELECT id, referrer FROM " + t
+      + " WHERE referrer LIKE '%?%' OR referrer LIKE '%#%'", null);
+    for (row in rs) {
+      let ref = str(row.referrer);
+      let clean = split(ref, "?")[0];
+      clean = split(clean, "#")[0];
+      if (clean != ref) {
+        let r = try(() => sql_write(crm_db,
+          "UPDATE " + t + " SET referrer = ? WHERE id = ?", [clean, row.id]));
+        if (r.err != null) {
+          print("referrer 清洗失败(" + t + "): " + r.err);
+        }
+      }
+    }
+  }
+}
+
+// 访客保留期清理:启动时跑一次,运行中每 24h 最多一次。
+func cleanup_visits() {
+  if (visit_retention_days <= 0) {
+    return;
+  }
+  let cutoff = int(now()) - visit_retention_days * 86400;
+  let r = try(() => sql_write(crm_db, "DELETE FROM visits_full WHERE created < ?", [cutoff]));
+  if (r.err != null) {
+    print("访客清理失败: " + r.err);
+  }
+  let r2 = try(() => sql_write(crm_db, "DELETE FROM visits WHERE created < ?", [cutoff]));
+  if (r2.err != null) {
+    print("旧访客清理失败: " + r2.err);
+  }
+  visit_last_cleanup = int(now());
+}
+
 // ------------------------------------------------ 业务字典(单一事实源)
 // 阶段白名单:服务端强制(add/update_deal 校验),前端选项经 /api/meta 下发,
 // 不靠前端自觉。新增阶段只改这里一处。
@@ -107,6 +280,8 @@ func ensure_db() {
     // sql_write 禁 ALTER/DROP,故新列只能落新表 + 一次性拷贝迁移(幂等)。
     "CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, referrer TEXT, ua TEXT, visitor TEXT, created INTEGER)",
     "CREATE TABLE IF NOT EXISTS visits_full (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, referrer TEXT, ua TEXT, visitor TEXT, ip TEXT, created INTEGER)",
+    // 分享链接表:token 落库才能做 TTL/撤销/最后访问;老库 CREATE IF NOT EXISTS 自动补。
+    "CREATE TABLE IF NOT EXISTS share_links (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER NOT NULL, version INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, expires INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0, last_access INTEGER NOT NULL DEFAULT 0)",
   ];
   for (s in ddl) {
     let r = try(() => sql_write(crm_db, s));
@@ -122,6 +297,9 @@ func ensure_db() {
   if (mig.err != null) {
     print("提示: visits 迁移跳过: " + mig.err);
   }
+  // 隐私清理:历史 referrer 剥 query/hash;按保留期删访客记录。
+  scrub_visit_referrers();
+  cleanup_visits();
   // 种子:customers 表为空才灌(重复启动幂等)
   let nc = q("SELECT COUNT(*) AS n FROM customers", null);
   if (int(get(nc, 0, {}), "n", 0) > 0) {
@@ -249,10 +427,14 @@ export func stats_payload() {
 }
 
 // ---------------------------------------------------------------- 访客统计
-// visits_full 表存 path/referrer/ua/visitor/ip/时间。访客去重靠前端
-// localStorage 生成的 visitor id;IP 来自连接端(req.remote_addr),仅 owner
-// 通过 PIN 门禁的 /api/visits 可见,线上 UI 不展示。
+// visits_full 表存 path/referrer(已剥 query)/ua/visitor/ip/时间。访客去重靠
+// 前端 localStorage 生成的 visitor id;IP 只认 nginx 覆写的 X-Real-IP
+// (回退 remote_addr),仅 owner 通过 PIN 门禁的 /api/visits 可见,线上 UI 不展示。
 export func record_visit(path, referrer, ua, visitor, ip) {
+  // 长时间运行的进程也要按保留期清理;最多每 24h 一次。
+  if (visit_last_cleanup > 0 and int(now()) - visit_last_cleanup >= 86400) {
+    cleanup_visits();
+  }
   let r = try(() => sql_write(crm_db,
     "INSERT INTO visits_full (path, referrer, ua, visitor, ip, created) VALUES (?, ?, ?, ?, ?, ?)",
     [path, referrer, ua, visitor, ip, int(now())]));
@@ -402,6 +584,12 @@ export func delete_customer(cid) {
     crm_unlock();
     return { err: "删除跟进失败: " + ra.err, status: 500 };
   }
+  // 客户删除后分享链接必须一并清掉,避免 stale token/审计行。
+  let rs = try(() => sql_write(crm_db, "DELETE FROM share_links WHERE customer = ?", [int(cid)]));
+  if (rs.err != null) {
+    crm_unlock();
+    return { err: "删除分享链接失败: " + rs.err, status: 500 };
+  }
   let rc = try(() => sql_write(crm_db, "DELETE FROM customers WHERE id = ?", [int(cid)]));
   crm_unlock();
   if (rc.err != null) {
@@ -411,6 +599,7 @@ export func delete_customer(cid) {
     ok: true, id: int(cid),
     deals_deleted: int(rd, "ok", 0),
     activities_deleted: int(ra, "ok", 0),
+    share_links_deleted: int(rs, "ok", 0),
   };
 }
 

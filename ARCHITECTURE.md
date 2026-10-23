@@ -121,7 +121,10 @@ framework defaults (details in README, Docker section).
 - **No Node runtime** — React SSR exists in lume (`server{ react_socket }`) but
   is intentionally unused here; a resident node process would break the
   "single binary" story. The one SSR page (`/share/customer`) uses the
-  framework's C-side `el/html` components — zero JS, auto-escaped slots.
+  framework's C-side `el/html` components — zero JS, auto-escaped slots. Its
+  anti-enumeration `token` is *derived* (`sha256(salt:id[:version])`) and checked
+  against a small `share_links` table (TTL / revoke / last access), so it needs
+  no CSPRNG in the DSL; a `CREATE TABLE IF NOT EXISTS` covers existing DBs.
 - **No ORM / no migrations framework** — `CREATE TABLE IF NOT EXISTS` + a
   first-run seed; the business dictionary (`deal_stages` / `closed_stages` /
   `default_stage`) is the single source of truth for stage semantics.

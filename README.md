@@ -26,10 +26,11 @@ English | [简体中文](README.zh.md)
 
 <https://lume-crm.erishen.cn> runs with `LUME_CRM_READONLY=1`: every write API returns
 403, the agent only registers the two query tools (`crm_search_customers` /
-`crm_get_customer`), and the UI hides every write control — the dashboard
-new-customer form, the customers add-deal / edit / delete / stage-select /
-activity forms, and write-type quick prompts appear only when developing on
-localhost. The chat page ships
+`crm_get_customer`), and the UI hides the customer/deal write controls — the
+dashboard new-customer form, the customers add-deal / edit / delete /
+stage-select / activity forms, and write-type quick prompts appear only when
+developing on localhost. Share create/revoke stays available even in read-only
+mode on purpose: revoking a leaked link must not be blocked by the demo flag. The chat page ships
 quick-prompt chips for the `crm_*` tools (click to send) and renders markdown tables.
 It also includes the "Build with Lume" teaching page (`/examples`, five
 copy-pasteable `.lume` DSL snippets) and a site-wide footer
@@ -73,8 +74,8 @@ to the shell).
 Dependencies: Lume uses **release binaries** (no dependency on a source tree
 `../lume`). Install:
 `curl -sSfL https://raw.githubusercontent.com/erishen/lume/main/install.sh | sh`
-(lands in `~/.local/bin/lume`; the DSL features used here need `lume >= v0.5.1` —
-pin with `LUME_VERSION=v0.5.1 sh install.sh`). For esbuild, the build prefers
+(lands in `~/.local/bin/lume`; the DSL features used here need `lume >= v0.8.1` —
+pin with `LUME_VERSION=v0.8.1 sh install.sh`). For esbuild, the build prefers
 `./node_modules/.bin/esbuild` after a local `npm install`, then `PATH`, then
 `../lume/frontend/node_modules` as a transitional fallback. React resolves from
 node_modules the same way.
@@ -101,7 +102,7 @@ produced by host-side `make ui`, simply COPYed in.
 ```bash
 make ui                   # build the frontend first (produces www/app.js)
 docker build -t lume-crm:latest .
-docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
+docker run -d -p 127.0.0.1:8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
 # → http://localhost:8089
 ```
 
@@ -113,11 +114,25 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   `LLM_MODEL=auto` from `.env`; neither URL nor key has a hardcoded default — put
   them in a sibling `.env` (gitignored), compose injects via `${VAR}` substitution.
   If either is missing, chat falls back to the offline demo engine.
-- **SSR customer share page**: `GET /share/customer?id=<n>` is server-rendered
-  (el/html components, zero JavaScript, self-contained CSS) — a link you can send
-  around that shows one customer's full profile (deals / activities). All customer
-  fields go through `html()` scalar slots — auto-escaped, stored XSS is not
-  feasible (verified by test).
+- **SSR customer share page**: `GET /share/customer?id=<n>&token=<t>` is
+  server-rendered (el/html components, zero JavaScript, self-contained CSS) — a
+  link you can send around that shows one customer's outward-facing profile
+  (deals / activity kinds + timestamps; internal activity notes are hidden by
+  default). `token` is derived from `salt + customer id + version` and checked
+  against the `share_links` table, so sequential ids cannot be enumerated; a
+  missing/wrong/expired/revoked token is a flat 404. Links expire after
+  `LUME_CRM_SHARE_TTL_DAYS` (default 30) and can be rotated/revoked per customer
+  via `POST /api/share/create|revoke`; successful opens update `last_access`.
+  A legacy `sha256(salt:id)` token is migrated on first use so existing links
+  keep working until revoked. All customer fields go through `html()` scalar
+  slots — auto-escaped, stored XSS is not feasible (verified by test).
+  Set `LUME_CRM_SHARE_INCLUDE_INTERNAL=1` only for internal demos if you really
+  need activity notes on the share page.
+  > **Public share vs auth**: lume's `HTPASSWD_FILE` / `LUME_AUTH_PASSWORD` is a
+  > global gate (v0.8.1) — it also 401s `/share/`. Put Basic Auth in the reverse
+  > proxy and exempt `/share/` there; don't enable both layers (see
+  > `docs/HARDENING.md` §4).
+  >
   > **C SSR vs React SSR**: lume also supports React SSR — `server{ react_socket }`
   > relays `/react/*` over FastCGI to a resident node process (react-dom/server +
   > StaticRouter + hydration), see `examples/react-ssr.lume`. This CRM **deliberately
@@ -176,6 +191,10 @@ docker run -d -p 8089:8089 -e LUME_BIND=0.0.0.0 lume-crm:latest
   - `.env.example` is **inert**: lume only opens the literal `".env"`, not
     `.env.example`, so it is harmless inside the image.
   - `LUME_BIND` / `LUME_AUTH_PASSWORD` go through `-e` or a mounted `/app/.env` too.
+  - Privacy knobs: `LUME_CRM_SHARE_TTL_DAYS` (default 30, `0` = never),
+    `LUME_CRM_VISIT_RETENTION_DAYS` (default 90, `0` = keep forever) and
+    `LUME_CRM_SHARE_INCLUDE_INTERNAL` (default `0`; `1` exposes activity notes
+    on share pages). See `docs/HARDENING.md` §4/§6.
   - To get real-LLM chat in the container, either works: `docker run -e LLM_API_URL=...`
     (higher priority) or mount a production `.env` at `/app/.env` (lume loads it itself).
 

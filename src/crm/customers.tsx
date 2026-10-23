@@ -1,6 +1,6 @@
 /* 客户列表 + 详情视图(SPA 内导出,由 app.tsx 按 /customers[/N] 挂载)。 */
 import React from "react";
-import { apiGet, apiPost, apiUpdateDeal, apiUpdateCustomer, apiDeleteCustomer, apiDeleteDeal, apiDeleteActivity, CustomerRow, CustomerDetail as CustomerDetailData } from "../api";
+import { apiGet, apiPost, apiCreateShare, apiRevokeShare, apiUpdateDeal, apiUpdateCustomer, apiDeleteCustomer, apiDeleteDeal, apiDeleteActivity, CustomerRow, CustomerDetail as CustomerDetailData } from "../api";
 import { fmtMoney, stageClass, go, useMeta, IS_LOCAL } from "./ui";
 
 export function CustomerList(): React.ReactElement {
@@ -145,6 +145,7 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
   const [kind, setKind] = React.useState("电话");
   const [note, setNote] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [shareBusy, setShareBusy] = React.useState(false);
   const [updating, setUpdating] = React.useState<number | null>(null);
   const { stages, kinds } = useMeta();
 
@@ -204,6 +205,41 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
       setErr((er as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ---- 分享链接:生成/轮换会让旧 token 立即失效,撤销同理 ----
+  async function rotateShare(): Promise<void> {
+    if (shareBusy) return;
+    if (d?.share_token && !window.confirm("重新生成会让当前分享链接立即失效,继续?")) return;
+    setShareBusy(true);
+    setErr("");
+    try {
+      const r = await apiCreateShare(id);
+      setD((prev) =>
+        prev ? { ...prev, share_token: r.share_token, share_expires: r.share_expires } : prev
+      );
+    } catch (er) {
+      setErr((er as Error).message);
+      refresh();
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeShare(): Promise<void> {
+    if (shareBusy || !d?.share_token) return;
+    if (!window.confirm("撤销后当前分享链接立即失效,继续?")) return;
+    setShareBusy(true);
+    setErr("");
+    try {
+      await apiRevokeShare(id);
+      setD((prev) => (prev ? { ...prev, share_token: "", share_expires: 0 } : prev));
+    } catch (er) {
+      setErr((er as Error).message);
+      refresh();
+    } finally {
+      setShareBusy(false);
     }
   }
 
@@ -313,15 +349,49 @@ export function CustomerDetail({ id }: { id: number }): React.ReactElement {
             {d.company || "—"} · {d.email || "—"} · {d.phone || "—"} · 加入 {d.created_fmt}
           </p>
           <div className="row-actions">
-            <a
-              className="btn ghost"
-              href={"/share/customer?id=" + id}
-              target="_blank"
-              rel="noreferrer"
-              title="打开 SSR 分享页(零 JS,可外发链接)"
-            >
-              分享页
-            </a>
+            {d.share_token ? (
+              <>
+                <a
+                  className="btn ghost"
+                  href={
+                    "/share/customer?id=" +
+                    id +
+                    "&token=" +
+                    encodeURIComponent(d.share_token)
+                  }
+                  target="_blank"
+                  rel="noreferrer"
+                  title="打开 SSR 分享页(零 JS,可外发链接)"
+                >
+                  分享页
+                </a>
+                <span className="subtitle">
+                  {d.share_expires
+                    ? "有效期至 " + new Date(d.share_expires * 1000).toLocaleDateString("zh-CN")
+                    : "永不过期"}
+                </span>
+                <button
+                  className="btn ghost"
+                  onClick={rotateShare}
+                  disabled={shareBusy}
+                  title="生成新 token,旧链接立即失效"
+                >
+                  {shareBusy ? "处理中…" : "重新生成"}
+                </button>
+                <button className="btn danger" onClick={revokeShare} disabled={shareBusy}>
+                  撤销分享
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn"
+                onClick={rotateShare}
+                disabled={shareBusy}
+                title="生成可外发的只读分享链接"
+              >
+                {shareBusy ? "处理中…" : "生成分享链接"}
+              </button>
+            )}
             {/* 编辑/删除仅本地开发可见(线上只读演示,服务端 403) */}
             {IS_LOCAL && (
               <>

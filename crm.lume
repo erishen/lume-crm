@@ -12,7 +12,9 @@
 //   POST /api/deals                 新建商机
 //   POST /api/deals/update          改商机阶段/金额/标题(空字段=不改)
 //   POST /api/activities           新增跟进
-//   GET  /share/customer?id=<n>    客户分享页(SSR 纯服务端渲染,零 JS,可外发)
+//   POST /api/share/create         生成/轮换客户分享链接(旧链接立即失效)
+//   POST /api/share/revoke         撤销客户分享链接
+//   GET  /share/customer?id=<n>&token=<t>  客户分享页(SSR 零 JS;token 防枚举)
 //   GET  /discovery                框架内省:tools/skills/mcps 目录(JSON)
 //   POST /react/api/chat           Agent SSE(框架原生,聊天页用)
 //
@@ -23,6 +25,9 @@
 // 被端口映射命中。htpasswd 走 env("HTPASSWD_FILE"):本地留空=无认证;公网
 // 部署务必注入(见 docker-entrypoint.sh + compose),否则 /api/* 与聊天工具
 // 裸暴露,任何人都可读写 .data/crm.db。
+// 注意:lume v0.8.1 的 Basic Auth 是全局的(自定义路由与 /share/ 同样拦),
+// 公网若要公开分享页,认证只放 nginx 并给 /share/ 例外;不要同时开容器内
+// HTPASSWD_FILE/LUME_AUTH_PASSWORD,否则分享链接会 401。
 
 // bind 可经 env 覆盖(容器传 LUME_BIND=0.0.0.0);本地默认仍绑 127.0.0.1。
 // htpasswd 走 env:本地留空=无认证,公网注入 HTPASSWD_FILE 即开 Basic Auth。
@@ -42,6 +47,10 @@ server {
 // 本地/开发不设该变量 = 完全可写)。Agent 工具面在 src/db.lume 同步收敛。
 let crm_readonly = env("LUME_CRM_READONLY") == "1";
 
+// 分享页默认只给客户看"可对外"字段;内部跟进备注默认隐藏。
+// LUME_CRM_SHARE_INCLUDE_INTERNAL=1 才恢复旧行为(内部演示/自用)。
+let crm_share_internal = env("LUME_CRM_SHARE_INCLUDE_INTERNAL") == "1";
+
 func write_gate() {
   if (crm_readonly) {
     return { status: 403, body: { err: "演示模式为只读(LUME_CRM_READONLY=1),写操作已禁用" } };
@@ -49,22 +58,76 @@ func write_gate() {
   return null;
 }
 
-// 访客统计只给 owner 看:配置 LUME_CRM_VISIT_PIN 后,查询必须带同名
-// query 参数(?pin=…)匹配才放行,否则 403——统计不暴露给公网访客。
-// 本地开发不设该 env = 免 PIN(自用便利);线上部署务必注入。
+// 访客统计只给 owner 看:配置 LUME_CRM_VISIT_PIN 后,查询须通过门禁才放行,
+// 否则 403——统计(含 IP 列表)不暴露给公网访客。
+// 本地可写开发不设该 env = 免 PIN(自用便利);只读演示(LUME_CRM_READONLY=1)
+// 不设 = 403(fail closed),防止忘配 PIN 时访客统计裸奔。
 // 注意:变量名刻意避开 TOKEN/KEY/SECRET 等敏感词——lume 的 env() 会把
 // 含这些词的变量名按"未设置"处理(防 DSL 侧泄露密钥),会静默关闭门禁。
-// req 不暴露 headers 字段(见 src/bridge.c),故 PIN 走 query_params。
+//
+// 门禁三条通道(任一精确匹配即放行,精确比较、fail closed):
+//   1. `X-CRM-Pin` 专用头(推荐,反代场景):避开 nginx Basic Auth 对
+//      Authorization 头的占用——一个请求只能带一个 Authorization,客户端
+//      无法同时发 Basic(过反代)和 Bearer(给应用)。nginx 默认转发自定义头,
+//      应用侧大小写不敏感匹配即可。
+//   2. `Authorization: Bearer <pin>` 或裸 `<pin>`(直连 / 关掉 Basic 时)。
+//   3. query `?pin=`(过渡 fallback,旧客户端/旧二进制;已做日志打码)。
 let visit_pin = env("LUME_CRM_VISIT_PIN");
+
+// 大小写不敏感取请求头:HTTP 头名不区分大小写,而 req.headers 保留客户端
+// 原始大小写(X-CRM-Pin / x-crm-pin 都可能)。仅核心内建 keys/lower/get。
+// 旧版 bridge 没有 headers 字段时 get() 返回 null → ""(自动降级到其它通道)。
+func header_ci(req, want) {
+  let hs = get(req, "headers", null);
+  if (hs == null) {
+    return "";
+  }
+  for (k in keys(hs)) {
+    if (lower(k) == want) {
+      return get(hs, k, "");
+    }
+  }
+  return "";
+}
+
+// 取 PIN,返回 "" 表示这些通道都没提供(由 visit_gate 决定是否看 query)。
+// 顺序:X-CRM-Pin → Authorization(非 Basic)→ 交给 query fallback。
+func auth_pin(req) {
+  let hdr = header_ci(req, "x-crm-pin");
+  if (hdr != null and hdr != "") {
+    return hdr;
+  }
+  let a = get(req, "authorization", "");
+  if (a == null or a == "") {
+    return "";
+  }
+  let parts = split(a, " ");
+  let n = len(parts);
+  // 反代 Basic Auth 会塞 `Basic <base64>`,那不是 PIN,显式跳过。
+  if (lower(parts[0]) == "basic") {
+    return "";
+  }
+  if (n > 1) {
+    return parts[n - 1];
+  }
+  return parts[0];
+}
+
 func visit_gate(req) {
   if (visit_pin == null or visit_pin == "") {
+    // 公网只读演示 fail closed:忘配 PIN 时不能把访客 IP 列表裸奔。
+    // 本地可写开发仍保留免 PIN 的便利。
+    if (crm_readonly) {
+      return { status: 403, body: { err: "访客统计 PIN 未配置" } };
+    }
     return null;
   }
-  let got = get(req.query_params, "pin", "");
-  if (got != visit_pin) {
-    return { status: 403, body: { err: "forbidden" } };
+  let from_hdr = auth_pin(req);
+  let from_query = get(req.query_params, "pin", "");
+  if (from_hdr == visit_pin or from_query == visit_pin) {
+    return null;
   }
-  return null;
+  return { status: 403, body: { err: "forbidden" } };
 }
 
 // 领域层:SQLite 助手 + crm_* 聊天工具(import 时建库/灌种子,tool 顶层注册)
@@ -101,20 +164,30 @@ func resp(res, created) {
 }
 
 // ------------------------------------------------ 读路径(sql_query 物理只读,免锁)
+// 读接口返回 PII(客户档案/访客 IP),显式 no-store,避免浏览器或中间缓存
+// 把数据留在磁盘上。lume 的 headers 只在带 body 的 envelope 路径生效,
+// 所以用 helper 包一层,而不是直接返回裸 map。
+func no_store(body) {
+  return { headers: { "Cache-Control": "no-store" }, body: body };
+}
+
 get "/api/stats", (req) => {
-  return crmdb.stats_payload();
+  return no_store(crmdb.stats_payload());
 };
 
 // 访客统计:owner-only(GET /api/visits 走 visit_gate 校验)。
 get "/api/visits", (req) => {
   let gate = visit_gate(req);
   if (gate != null) { return gate; }
-  return crmdb.visits_summary();
+  return no_store(crmdb.visits_summary());
 };
 
 // 访客埋点:记录一次页面访问(不 gate——只读演示也要统计访问量)。
-// IP 取连接端 req.remote_addr(仅 owner 经 PIN 门禁可见),去重靠前端
-// localStorage 的 visitor id。
+// IP 只信 nginx 覆写的 X-Real-IP,回退连接端 remote_addr。不要读
+// X-Forwarded-For:客户端可伪造/拼接多值,会把假 IP 写进库。仅 owner 经
+// PIN 门禁可见;去重靠前端 localStorage 的 visitor id。
+// referrer 只留 origin+path,剥掉 query/hash,避免把第三方 URL 里的
+// token/搜索词等 PII 一起入库。
 post "/api/visit", (req) => {
   let b = body_of(req);
   if (b.err != null) {
@@ -122,9 +195,13 @@ post "/api/visit", (req) => {
   }
   let path = get(b.ok, "path", "");
   let referrer = get(b.ok, "referrer", "");
+  if (referrer != null and referrer != "") {
+    referrer = split(referrer, "?")[0];
+    referrer = split(referrer, "#")[0];
+  }
   let ua = get(b.ok, "ua", "");
   let visitor = get(b.ok, "visitor", "");
-  let ip = get(req, "x_forwarded_for", "");
+  let ip = header_ci(req, "x-real-ip");
   if (ip == "" or ip == null) {
     ip = get(req, "remote_addr", "");
   }
@@ -172,7 +249,7 @@ get "/api/customers", (req) => {
   let q = get(req.query_params, "q", "");
   let sort = get(req.query_params, "sort", "");
   let list = crmdb.customer_list(q, sort);
-  return { count: len(list), customers: list };
+  return no_store({ count: len(list), customers: list });
 };
 
 get "/api/customer", (req) => {
@@ -181,7 +258,20 @@ get "/api/customer", (req) => {
   if (c == null) {
     return { status: 404, body: { err: "客户 " + str(id) + " 不存在" } };
   }
-  return c;
+  // 前端据此拼分享链接(/share/customer?id=N&token=...)。此接口在公网必须
+  // 位于 Basic Auth 之后(见 deploy/nginx-lume-crm.conf),否则连同 PII 一起裸奔。
+  // 首次访问会自动建一条 version=0 的兼容链接;撤销/过期后返回空 token,
+  // 需要显式 POST /api/share/create 才重新生成(不会无限复活)。
+  let link = crmdb.active_share_link(id);
+  let token = "";
+  let expires = 0;
+  if (link != null) {
+    token = get(link, "token", "");
+    expires = int(get(link, "expires", 0));
+  }
+  put(c, "share_token", token);
+  put(c, "share_expires", expires);
+  return no_store(c);
 };
 
 // ------------------------------------------------ 写路径(助手里 flock 串行)
@@ -290,16 +380,78 @@ post "/api/activities/delete", (req) => {
   return resp(crmdb.delete_activity(int(b.ok, "activity_id", 0)), false);
 };
 
+// ------------------------------------------------ 分享链接管理(写,但仅安全控制)
+// 刻意不套 write_gate:只读演示里也应允许撤销泄露链接;这些路由只写
+// share_links,不改客户/商机数据。公网必须由 nginx Basic Auth 保护。
+post "/api/share/create", (req) => {
+  let b = body_of(req);
+  if (b.err != null) {
+    return { status: 400, body: { err: b.err } };
+  }
+  let cid = int(b.ok, "customer_id", 0);
+  if (crmdb.customer_by_id(cid) == null) {
+    return { status: 404, body: { err: "客户不存在" } };
+  }
+  // 重新生成 = 轮换:旧链接立即失效,新链接用 version+1 的派生 token。
+  if (not crmdb.revoke_share_links(cid)) {
+    return { status: 500, body: { err: "旧分享链接撤销失败" } };
+  }
+  let link = crmdb.create_share_link(cid);
+  if (link == null) {
+    return { status: 500, body: { err: "分享链接生成失败(检查 SHARE_SALT 是否配置)" } };
+  }
+  return {
+    headers: { "Cache-Control": "no-store" },
+    body: {
+      ok: true,
+      customer_id: cid,
+      share_token: get(link, "token", ""),
+      share_expires: int(get(link, "expires", 0))
+    }
+  };
+};
+
+post "/api/share/revoke", (req) => {
+  let b = body_of(req);
+  if (b.err != null) {
+    return { status: 400, body: { err: b.err } };
+  }
+  let cid = int(b.ok, "customer_id", 0);
+  if (crmdb.customer_by_id(cid) == null) {
+    return { status: 404, body: { err: "客户不存在" } };
+  }
+  if (not crmdb.revoke_share_links(cid)) {
+    return { status: 500, body: { err: "撤销失败" } };
+  }
+  return {
+    headers: { "Cache-Control": "no-store" },
+    body: { ok: true, customer_id: cid }
+  };
+};
+
 // ------------------------------------------------ SSR:对外分享(只读,GET-only)
 // 客户分享页:纯服务端渲染(el/html 组件,零 JS),可直接外发链接。
-// 数据走已有的只读助手 customer_by_id;404 与 API 同款语义。
+// 防枚举:必须带 `?token=` 且与 share_links 中未撤销、未过期的 token 精确匹配。
+// 不区分"客户不存在 / token 不对 / 已撤销 / 已过期 / 未配置 salt",一律 404
+// ——不给枚举者存在性 oracle。数据走已有的只读助手 customer_by_id。
 get "/share/customer", (req) => {
   let id = int(req.query_params, "id", 0);
+  let token = get(req.query_params, "token", "");
+  let link = crmdb.share_link_by_token(id, token);
+  if (link == null) {
+    return { status: 404, body: { err: "not found" } };
+  }
   let c = crmdb.customer_by_id(id);
   if (c == null) {
-    return { status: 404, body: { err: "客户 " + str(id) + " 不存在" } };
+    return { status: 404, body: { err: "not found" } };
   }
-  return crmshare.share_page(c);
+  return {
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Robots-Tag": "noindex, nofollow, noarchive"
+    },
+    body: crmshare.share_page(c, crm_share_internal)
+  };
 };
 
 // 发现页:框架内省目录(与 examples/demo.lume 同款口径)。tools() 反映真实

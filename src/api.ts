@@ -36,6 +36,10 @@ export interface Activity {
 export interface CustomerDetail extends Omit<CustomerRow, "deal_count" | "activity_count" | "pipeline"> {
   deals: Deal[];
   activities: Activity[];
+  /** 当前有效分享 token(见 /api/customer);空串表示已撤销/过期。 */
+  share_token?: string;
+  /** 分享链接过期时间(Unix 秒);0 = 不过期。 */
+  share_expires?: number;
 }
 
 export interface Stats {
@@ -96,7 +100,7 @@ export function apiUpdateCustomer(id: number, patch: { name?: string; company?: 
 }
 
 /* 删客户 + 级联清掉其名下商机/跟进。 */
-export function apiDeleteCustomer(id: number): Promise<{ ok: boolean; id: number; deals_deleted: number; activities_deleted: number }> {
+export function apiDeleteCustomer(id: number): Promise<{ ok: boolean; id: number; deals_deleted: number; activities_deleted: number; share_links_deleted?: number }> {
   return apiPost("/api/customers/delete", { customer_id: id });
 }
 
@@ -110,6 +114,16 @@ export function apiDeleteActivity(id: number): Promise<{ ok: boolean; activity_i
   return apiPost("/api/activities/delete", { activity_id: id });
 }
 
+/* 生成/轮换分享链接:旧链接立即失效,返回新 token 与过期时间。 */
+export function apiCreateShare(id: number): Promise<{ ok: boolean; customer_id: number; share_token: string; share_expires: number }> {
+  return apiPost("/api/share/create", { customer_id: id });
+}
+
+/* 撤销分享链接(幂等;撤销后 /api/customer 不再返回 token)。 */
+export function apiRevokeShare(id: number): Promise<{ ok: boolean; customer_id: number }> {
+  return apiPost("/api/share/revoke", { customer_id: id });
+}
+
 /* 业务字典(服务端单一事实源):商机阶段白名单 + 终态标记 + 默认阶段 + 跟进类型建议集。
  * 选项从 /api/meta 下发,不再前端写死;DEAL_STAGES 仅作 meta 未就绪时的兜底。 */
 export interface Meta {
@@ -120,7 +134,8 @@ export interface Meta {
 }
 
 /* 访客埋点:页面加载/路由切换时上报一次(PV)。visitor id 由前端 localStorage
- * 生成并持久化,服务端不存 IP——隐私干净,线上只读模式也可用。 */
+ * 生成并持久化;服务端会记录 IP、UA 与来源(仅 owner 经 PIN 可见),线上只读
+ * 模式也可用。referrer 在服务端剥掉 query/hash 后再入库。 */
 export function apiRecordVisit(): Promise<{ ok: boolean }> {
   let visitor = window.localStorage.getItem("lume_crm_visitor");
   if (!visitor) {
