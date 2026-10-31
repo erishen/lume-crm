@@ -27,10 +27,14 @@
 # ============================================================================
 
 # ---- 拉静态二进制(builder, 用完即弃) ----
+#
+# peer 节点只做 verify(收请求), **没有出站 HTTP** —— 所以它不受 lume-lan
+# 那次 fork/TLS 问题的影响, 用上游 release 即可, 不必跟着源码重编。
+# (lume-lan 需要重编是因为它要主动打对端; 两者需求不同, 别照抄。)
 FROM alpine:3.20 AS fetch
 RUN apk add --no-cache ca-certificates curl tar
 ARG LUME_VERSION=v0.8.1
-RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/${LUME_VERSION}/install.sh" \
+RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/v0.8.1/install.sh" \
     | LUME_VERSION=${LUME_VERSION} LUME_STATIC=1 LUME_PREFIX=/usr/local sh
 
 # ---- 运行时(alpine, 极小) ----
@@ -44,6 +48,13 @@ WORKDIR /app
 COPY crm.lume ./
 COPY src/ ./src/
 COPY www/ ./www/
+# peer 节点: 让 CRM 能被其它 lume 应用(如 lume-lan 的"应用互访")发现与查询。
+# 与 crm.lume **各自一个 server{}**, 主服务一行都不用改; 靠命令行动作选起哪个。
+COPY peer_node.lume ./
+# lume-core 的 peer 模块。peer_node.lume 里 import "../lume-core/lib/peer.lume",
+# 从 /app 看就是 /lume-core/lib/peer.lume —— 所以放在**根目录**下。
+# 构建上下文里没有它(在 ../lume-core), 由 make docker-build 先同步到 .runtime/。
+COPY .runtime/lume-core/lib/ /lume-core/lib/
 COPY .env.example ./.env.example
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
@@ -52,6 +63,16 @@ RUN chmod +x ./docker-entrypoint.sh
 RUN mkdir -p .data
 
 EXPOSE 8089
+
+# 健康检查: 主服务看 /api/..., peer 看 /peer/health(端口不同、端点不同)。
+# 用 PEER_PORT 是否存在切换 —— 只有 peer 容器会设它(见 compose profiles)。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD if [ -n "$PEER_PORT" ]; then \
+          curl -fsS -m 4 "http://127.0.0.1:$PEER_PORT/peer/health" >/dev/null || exit 1; \
+        else \
+          curl -fsS -m 4 http://127.0.0.1:8089/health >/dev/null 2>&1 \
+            || curl -fsS -m 4 http://127.0.0.1:8089/ >/dev/null 2>&1 || exit 1; \
+        fi
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["/usr/local/bin/lume", "crm.lume"]

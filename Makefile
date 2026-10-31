@@ -22,7 +22,9 @@
 # 前端 esbuild:优先 ./node_modules/.bin/esbuild(CRM 本地 npm install 后),
 # 其次 PATH 上的 esbuild,最后兜底 ../lume/frontend/node_modules(过渡用)。
 
-LUME      ?= $(HOME)/.local/bin/lume
+# 用**仓库里的** lume, 不用 ~/.local/bin/lume(那是旧版本, 与工作区源码
+# 不一致: 新语法不认识, --check 会漏报; 两个版本同时常驻还会争同一端口)。
+LUME      ?= ../lume/bin/lume
 PORT      ?= 8089
 DOCKER    ?= /usr/local/bin/docker
 IMAGE     ?= lume-crm:latest
@@ -78,6 +80,14 @@ clean:
 # OrbStack 下 docker build 偶发 buildx 活动目录权限错, 先清掉再 build。
 docker-build:
 	@rm -rf $(HOME)/.docker/buildx/activity 2>/dev/null || true
+	@# lume-core/lib 在构建上下文之外(Docker 不允许 COPY ../), 先同步进来
+	@# 再由 Dockerfile COPY 到镜像根 /lume-core/lib —— 那是 peer_node.lume 里
+	@# "../lume-core/lib/peer.lume" 从 /app 解析出来的位置。
+	@if [ -d ../lume-core/lib ]; then \
+	  rm -rf .runtime/lume-core && mkdir -p .runtime/lume-core && \
+	  cp -R ../lume-core/lib .runtime/lume-core/; \
+	else \
+	  echo "✗ 找不到 ../lume-core/lib (应与 lume-crm 同级)" >&2; exit 1; fi
 	@$(DOCKER) build -t $(IMAGE) .
 
 # ------------------------------------------------ docker-run: 前台起容器(Ctrl-C 停)
@@ -89,12 +99,143 @@ docker-run:
 docker-up:
 	@$(DOCKER) compose up -d
 
+# ---- 跨应用共享网络(lume-peer-net) ----
+#
+# peer 容器不发布宿主端口(compose 里是 expose), 靠这张网按别名被看板等
+# 应用访问(crm-peer:18102)。
+#
+# external 而不是让本 compose 定义: 三个应用各自独立部署, 谁先起都不该
+# 决定这张网的生命周期。代价是它可能不存在, 所以 peer 目标先过这个检查。
+PEER_NET ?= lume-peer-net
+
+check-peer-net:
+	@if $(DOCKER) network inspect $(PEER_NET) >/dev/null 2>&1; then :; \
+	 else \
+	  echo "▶ 创建共享网络 $(PEER_NET)"; \
+	  $(DOCKER) network create $(PEER_NET) >/dev/null; \
+	 fi
+
+peer-net-rm:
+	@$(DOCKER) network rm $(PEER_NET) 2>/dev/null && echo "  已删除 $(PEER_NET)" \
+	  || echo "  $(PEER_NET) 不存在或仍被容器占用"
+
 docker-down:
-	@$(DOCKER) compose down
+	@# --profile peer 显式带上: compose down 只停"当前 profile 里"的服务,
+	@# 而一旦把 .env 里的 COMPOSE_PROFILES 注释掉, peer 就不在集合里了 ——
+	@# 那个容器会一直留着(实测), 成为"以为停了其实还在跑"的幽灵。
+	@$(DOCKER) compose --profile peer down 2>/dev/null || $(DOCKER) compose down
+
+# ------------------------------------------------ peer: 局域网互通节点
+# peer 面是独立容器, 是否启用由 **.env 里的 COMPOSE_PROFILES** 决定:
+#   COMPOSE_PROFILES=peer   → docker-up / docker-peer-up 都会带上它
+#   没有这一行               → 只起主服务
+#
+# 所以这里不再硬编码 --profile: 命令行给的 profile 会和 .env 的叠加,
+# 那样即使 .env 里关掉了, 敲一次 docker-peer-up 也会把它起起来 ——
+# 开关就形同虚设了。
+docker-peer-up: check-peer-net
+	@if ! grep -qE '^COMPOSE_PROFILES=.*peer' .env 2>/dev/null; then \
+	  echo "✗ .env 里没有 COMPOSE_PROFILES=peer —— peer 节点未启用"; \
+	  echo "  要启用: 在 .env 加一行 COMPOSE_PROFILES=peer"; \
+	  echo "  (并确保 PEER_SHARED / PEER_ROOT 已配, 否则对端会拒)"; \
+	  exit 1; fi
+	@$(DOCKER) compose up -d peer
+
+# 自注册: 写 .data/peers.d/crm.json, 让其它节点能认出本节点。
+# 默认目录是 lume-lan/.data/peers.d(所有节点共用一处); 换位置设 PEER_REG_DIR。
+PEER_REG_SHARED ?= ../lume-lan/.data/peers.d
+peer-register:
+	@mkdir -p $(PEER_REG_SHARED)
+	@printf '%s\n' '{"node":"crm","port":18102,"registered_at":'$$(date +%s)'}' \
+	  > $(PEER_REG_SHARED)/crm.json
+	@echo "  已自注册 crm → $(PEER_REG_SHARED)/crm.json"
+
+peer-registry:
+	@ls -1 $(PEER_REG_SHARED) 2>/dev/null | sed 's/\.json$$//' | sed 's/^/  /' || echo "  (空)"
+
+docker-peer-down:
+	@$(DOCKER) compose stop peer 2>/dev/null || true
+	@$(DOCKER) compose rm -f peer 2>/dev/null || true
+
+docker-peer-logs:
+	@$(DOCKER) logs -f lume-crm-peer
 
 # ------------------------------------------------ docker-logs: 跟随容器日志
 docker-logs:
 	@$(DOCKER) logs -f $(CNAME)
 
-.PHONY: default dev check ui watch crm crm-dev clean \
+.PHONY: peer-serve peer-up peer-register peer-registry peer-down peer-status peer-check  default dev check ui watch crm crm-dev clean \
         docker-build docker-run docker-up docker-down docker-logs
+
+# peer-node-targets
+# ---- 本应用的 peer 节点(供其它 lume 应用发现与查询) ----
+#
+# 谁负责起: **本应用自己**。看板(lume-lan)只负责"探"和"展示", 不该替别的
+# 应用管进程生命周期 —— 那会造成版本/配置永久漂移: 改了 peer_node.lume
+# 或换了端口, 看板那边不知道, 也不会重启它。
+#
+# 端口约定(改这里要同时改 lume-lan/.env 的 PEER_TARGETS):
+#   lume-blog    → 18321
+#   lume-crm     → 18102
+#   lume-scanner → 18103
+PEER_PORT_RUN ?= 18102
+# 绑定地址。默认 127.0.0.1(单机安全基线: 只有本机能连)。
+#
+# 跨机时必须设 0.0.0.0 —— 但那个决定不该藏在 Makefile 里: 之前这里是硬编码
+# 127.0.0.1, 于是 .env 里写 PEER_BIND=0.0.0.0 完全不生效, 而文档却说"配
+# PEER_BIND 即可"。这种"配了不生效"比"不支持"更难排查(实测另一台机器
+# 连过来只得到连接被拒, 看起来像网络问题)。
+#
+# 现在: .env 的 PEER_BIND 优先, 没写才用 127.0.0.1。
+PEER_BIND_RUN ?= $(shell grep -E '^PEER_BIND=' .env 2>/dev/null | cut -d= -f2- | sed 's/^$$/127.0.0.1/')
+PEER_BIND_RUN := $(if $(PEER_BIND_RUN),$(PEER_BIND_RUN),127.0.0.1)
+PEER_NAME_RUN ?= crm
+PEER_SHARED_RUN ?= $(shell grep -E '^PEER_SHARED=' .env 2>/dev/null | cut -d= -f2-)
+PEER_ROOT_RUN ?= $(shell grep -E '^PEER_ROOT=' .env 2>/dev/null | cut -d= -f2-)
+PEER_BIN ?= ../lume/bin/lume
+SITE_NAME ?= lume-crm
+
+# 前台起(调试时看得见日志)。Ctrl-C 停。
+peer-serve:
+	@if [ ! -x "$(PEER_BIN)" ]; then \
+	  echo "✗ 找不到 $(PEER_BIN) —— 先 cd ../lume && make" >&2; exit 1; fi
+	@if [ -z "$(PEER_SHARED_RUN)$(PEER_ROOT_RUN)" ]; then \
+	  echo "✗ .env 里 PEER_SHARED / PEER_ROOT 都是空的 —— 对端会拒绝所有请求" >&2; exit 1; fi
+	@echo "▶ $(PEER_NAME_RUN) peer :$(PEER_PORT_RUN)"
+	@PEER_NAME=$(PEER_NAME_RUN) PEER_PORT=$(PEER_PORT_RUN) PEER_BIND=$(PEER_BIND_RUN) \
+	  PEER_SHARED="$(PEER_SHARED_RUN)" PEER_ROOT="$(PEER_ROOT_RUN)" \
+	  PEER_SITE_NAME=$(SITE_NAME) \
+	  $(PEER_BIN) peer_node.lume
+
+# 后台常驻。日志落 .runtime-peer.log。
+# 起本节点的 peer。顺带把自己的名字写进共享自注册目录 ——
+# 别的节点靠扫那个目录认人, 所以"多了一个应用"不需要改它们的白名单。
+peer-up: peer-register
+	@if [ -x "$(PEER_BIN)" ]; then :; else \
+	  echo "✗ 找不到 $(PEER_BIN) —— 先 cd ../lume && make" >&2; exit 1; fi
+	@if lsof -nP -iTCP:$(PEER_PORT_RUN) -sTCP:LISTEN >/dev/null 2>&1; then \
+	  echo "  $(PEER_NAME_RUN) :$(PEER_PORT_RUN) 已在监听"; \
+	 else \
+	  PEER_NAME=$(PEER_NAME_RUN) PEER_PORT=$(PEER_PORT_RUN) PEER_BIND=$(PEER_BIND_RUN) \
+	  PEER_SHARED="$(PEER_SHARED_RUN)" PEER_ROOT="$(PEER_ROOT_RUN)" \
+	  PEER_SITE_NAME=$(SITE_NAME) \
+	  PEER_REG_DIR=$(PEER_REG_SHARED) \
+	    nohup $(PEER_BIN) peer_node.lume < /dev/null > .runtime-peer.log 2>&1 & \
+	  echo $! > .runtime-peer.pid; \
+	  sleep 1; \
+	  echo "  已启动 $(PEER_NAME_RUN) :$(PEER_PORT_RUN) → .runtime-peer.log"; fi
+
+peer-down:
+	@if [ -f .runtime-peer.pid ]; then \
+	  kill $$(cat .runtime-peer.pid) 2>/dev/null && echo "  已停 $(PEER_NAME_RUN)" || true; \
+	  rm -f .runtime-peer.pid; \
+	 else echo "  $(PEER_NAME_RUN) 未在运行(或不是本仓库起的)"; fi
+
+peer-status:
+	@n=$$(lsof -nP -iTCP:$(PEER_PORT_RUN) -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' '); \
+	 if [ "$$n" -gt 0 ]; then echo "  $(PEER_NAME_RUN) :$(PEER_PORT_RUN) 在监听"; \
+	 else echo "  $(PEER_NAME_RUN) :$(PEER_PORT_RUN) 未运行"; fi
+
+# 语法检查(用仓库里的 lume, 不用 ~/.local/bin 的旧版)
+peer-check:
+	@$(PEER_BIN) --check peer_node.lume

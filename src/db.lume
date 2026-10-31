@@ -353,7 +353,12 @@ export func customer_list(query, sort) {
     + " (SELECT COUNT(*) FROM activities WHERE customer = c.id) AS activity_count,"
     + " (SELECT COALESCE(SUM(amount), 0.0) FROM deals WHERE customer = c.id) AS pipeline"
     + " FROM customers c";
-  let params = null;
+  // 空列表当"无参数"而不是 null: q() 直接把 params 交给 sql_query,
+  // sqlite 侧对空数组与 null 的处理一致(都表示无绑定值), 但**类型**上
+  // 空列表与 [pat,pat,pat] 是同构的 —— 而 null 与列表不是, 后者赋值会
+  // 触发 assignment type mismatch。(同样的问题在 lume-lan 的 peer/agent.lume
+  // 也踩过: {..} 字面量与 null 都有固定的窄类型。)
+  let params = [];
   if (query != "") {
     sql = sql + " WHERE c.name LIKE ? OR c.company LIKE ? OR c.email LIKE ?";
     let pat = "%" + query + "%";   // 通配符拼接后仍是绑定值,不进 SQL 文本

@@ -1,0 +1,387 @@
+// peer_node.lume — 把 CRM 暴露成局域网 peer 节点
+//
+// 用途: 让 lume-crm 能被其它 lume 应用(如 lume-lan 的"应用互访")发现与查询。
+// 与 crm.lume **完全独立**: 各自一个 server{}, CRM 本体一行都不用改。
+//
+// 启动:
+//   PEER_SHARED=<共享密钥> PEER_NAME=crm PEER_PORT=18102 \
+//     PEER_BIND=127.0.0.1 ../lume/bin/lume peer_node.lume
+//
+// 端点(全部需 HMAC 签名; 未配 PEER_SHARED / PEER_ROOT 时整面关闭):
+//   GET  /peer/health   健康与身份
+//   GET  /peer/tools    能力清单
+//   GET  /peer/info     概要统计(客户数/商机数/成交额等)
+//   POST /peer/invoke   执行一个声明的工具
+//
+// ── 安全边界(重要) ────────────────────────────────────────────────
+// * **只读**。CRM 里客户/商机/活动都含个人信息, 而这个节点一旦开放就是
+//   "局域网内任何持钥者可查" —— 所以这里只提供**聚合口径**(计数、金额、
+//   阶段分布), 不提供"列客户名单""按邮箱查人"这类能拉出个人数据的工具。
+//   真要按客户查详情, 应该走 CRM 自己的登录态页面, 而不是 peer 面。
+// * 写操作(新增/修改/删除客户与商机)**一律不开放**: 那需要 crm_lock()
+//   串行化与审计, 属于 CRM 自己的事务边界, 不该从外部绕过。
+// * 签名/防重放/明文传输的约束见 lume-core/lib/peer.lume 文件头。
+import "../lume-core/lib/peer.lume" as peer;
+import "src/db.lume" as db;
+import "src/a2a.lume" as a2a;
+import "src/a2a_tasks.lume" as tasks;
+
+let bind_addr = env("PEER_BIND");
+if (bind_addr == null) { bind_addr = "127.0.0.1"; }
+let port_s = env("PEER_PORT");
+if (port_s == null) { port_s = "18102"; }
+let site_name = env("PEER_SITE_NAME");
+if (site_name == null) { site_name = "lume-crm"; }
+
+server {
+  port = int(port_s);
+  workers = 2;
+  bind = bind_addr;
+};
+
+// 启动自检：把"实际生效的签名模式"打到日志。配了两套凭据时(历史遗留很常见)
+// 不主动看 health 就分不清用的是哪一套 —— 拿错算法签名会一路 401, 现象像密钥错。
+if (len(peer.config_warnings()) > 0) {
+  print("[peer] signature mode: " + peer.key_mode());
+  let wi = 0;
+  while (wi < len(peer.config_warnings())) {
+    print("[peer] WARN " + str(get(peer.config_warnings(), wi, "")));
+    wi = wi + 1;
+  }
+}
+
+get "/peer/health", (req) => {
+  let v = peer.verify_get(req);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  return {
+    ok: true, node: peer.node_info()["name"], site: site_name,
+    peer: get(v, "node", ""), ts: int(now()),
+    // 实际生效的签名模式 + 配置自检(见 lume-core/lib/peer.lume 的 key_mode)
+    mode: peer.key_mode(), warnings: peer.config_warnings(),
+  };
+};
+
+// 能力清单的单一事实源: /peer/tools 与 Agent Card 都从这里取。
+func tool_list() {
+  return [
+    {
+      name: "crm.stats",
+      desc: "客户数、商机数、开放管道金额、成交率等聚合统计",
+      when_to_use: "用户问「有多少客户/商机」「这个月成交多少」「成交率多少」时用。" +
+                   "不要用 fs 去读 .data/crm.db 自己算。",
+    },
+    {
+      name: "crm.pipeline",
+      desc: "按阶段统计的商机分布(数量 + 金额)",
+      when_to_use: "用户问「各阶段各有多少商机」「管道卡在哪个阶段」时用。",
+    },
+  ];
+}
+
+func app_summary() {
+  return "CRM 的客户与商机聚合统计(只读, 不含个人明细)。查客户数、商机金额、" +
+         "成交率、阶段分布时用这里。新增/修改客户与商机不在这条链路上。";
+}
+
+get "/peer/tools", (req) => {
+  let v = peer.verify_get(req);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  return {
+    ok: true, node: peer.node_info()["name"], site: site_name,
+    summary: app_summary(), tools: tool_list(),
+  };
+};
+
+// 概要: 只挑聚合字段。stats_payload() 里带 customers(完整客户列表),
+// 这里**不转发** —— 那是个人数据, peer 面不该出。
+get "/peer/info", (req) => {
+  let v = peer.verify_get(req);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  let s = db.stats_payload();
+  return {
+    ok: true, node: peer.node_info()["name"], site: site_name, ts: int(now()),
+    customer_count: get(s, "customer_count", 0),
+    deal_count: get(s, "deal_count", 0),
+    open_pipeline: get(s, "open_pipeline", 0),
+    won_deals: get(s, "won_deals", 0),
+    won_amount: get(s, "won_amount", 0),
+    lost_deals: get(s, "lost_deals", 0),
+    win_rate: get(s, "win_rate", 0),
+  };
+};
+
+// 执行本节点声明的一个工具。body: {"tool":"<name>","arguments":{...}}
+// 白名单实现: 只认 tool_list() 里那两个, 未知名直接拒 —— 不像 agent 侧
+// 可以调任意已注册 MCP 工具。
+post "/peer/invoke", (req) => {
+  let body = str(get(req, "body", ""));
+  let v = peer.verify(req, "POST", "POST " + peer.path_only(req.path) + "\n" + body);
+  if (!get(v, "ok", false)) {
+    return { ok: false, unauthorized: true, error: get(v, "error", "") };
+  }
+  let parsed = try(() => json(body));
+  if (parsed.err != null) { return { ok: false, error: "body 不是合法 JSON" }; }
+  let tool_name = str(get(parsed.ok, "tool", ""));
+  if (len(tool_name) == 0) { return { ok: false, error: "缺少 tool 字段" }; }
+
+  let s = db.stats_payload();
+
+  if (tool_name == "crm.stats") {
+    return {
+      ok: true, node: peer.node_info()["name"], "tool": tool_name,
+      result: {
+        customer_count: get(s, "customer_count", 0),
+        deal_count: get(s, "deal_count", 0),
+        open_pipeline: get(s, "open_pipeline", 0),
+        won_deals: get(s, "won_deals", 0),
+        won_amount: get(s, "won_amount", 0),
+        lost_deals: get(s, "lost_deals", 0),
+        win_rate: get(s, "win_rate", 0),
+      },
+    };
+  }
+
+  if (tool_name == "crm.pipeline") {
+    // by_stage 的键是 "阶段名" 与 "阶段名.amt"(金额), 摊平成两条数组更好用:
+    // 调用方不必知道这个内部编码约定。
+    let raw = get(s, "by_stage", {});
+    let stages = [];
+    let ks = keys(raw);
+    let i = 0;
+    while (i < len(ks)) {
+      let k = str(get(ks, i, ""));
+      if (len(str_match("\\.amt$", k)) == 0) {
+        push(stages, {
+          stage: k,
+          count: int(get(raw, k, 0)),
+          amount: float(get(raw, k + ".amt", 0)),
+        });
+      }
+      i = i + 1;
+    }
+    return {
+      ok: true, node: peer.node_info()["name"], "tool": tool_name,
+      result: { stages: stages },
+    };
+  }
+
+  return { ok: false, "tool": tool_name,
+           error: "unknown tool '" + tool_name + "' (whitelist: crm.stats, crm.pipeline)" };
+};
+
+// ══════════════════════════════════════════════════════════════════
+// A2A 兼容层(与 lume-blog / lume-lan 同一套规范)
+// ══════════════════════════════════════════════════════════════════
+//
+// 为什么数据节点也要有 Agent Card: 没有它, 任何标准 A2A 客户端(或别的
+// lume 节点的 peer_bridge)都发现不了这个节点 —— 只能靠"知道端口"这种
+// 带外信息。Card 是规范里的**发现入口**, 缺了就等于不可发现。
+//
+// 本节点是**只读数据节点**, 所以 Card 里 agent_backed=false 如实声明:
+// 它没有能推理的 agent, `message/send` 走的是"按关键词选一个工具执行",
+// 不是模型作答。谎报成 true 会让调用方期待它"能思考"。
+
+get "/.well-known/agent-card.json", (req) => {
+  return a2a.card(peer.node_info()["name"], app_summary(), tool_list(), "/a2a", false);
+};
+
+post "/a2a", (req) => {
+  let body = str(get(req, "body", ""));
+  let parsed = try(() => json(body));
+  if (parsed.err != null) {
+    return { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } };
+  }
+  let rpc = parsed.ok;
+  let mid = get(rpc, "id", null);
+  let method = str(get(rpc, "method", ""));
+
+  // ---- message/stream: SSE 事件流 ----
+  // 与 blog 同一套: 同步执行 + 一次性回放事件。数据节点没有长任务,
+  // 所以 working → artifact → completed 三条就够, 不需要中途进度。
+  if (method == "message/stream" or method == "message/streaming") {
+    let params = get(rpc, "params", {});
+    let question = a2a.message_text(params);
+    if (len(question) == 0) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32602, message: "params.message.parts 里没有 text" } };
+    }
+    let ctx = str(get(params, "contextId", ""));
+    if (len(ctx) == 0) { ctx = peer.new_message_id(); }
+    let tid = peer.new_task_id();
+
+    let events = [];
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "status-update",
+                status: { state: "working", timestamp: str(now()) }, "final": false } }));
+
+    let answer = answer_question(question);
+    if (answer == null) {
+      push(events, stringify({ jsonrpc: "2.0", id: mid,
+        result: { taskId: tid, contextId: ctx, kind: "status-update",
+                  status: { state: "input-required", timestamp: str(now()),
+                            message: { role: "agent", parts: [{ kind: "text",
+                              text: "我可以回答客户数/商机数/成交额, 或各阶段分布。请具体一点。" }] } },
+                  "final": true } }));
+      return { sse: events };
+    }
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "artifact-update",
+                artifact: { artifactId: peer.new_message_id(),
+                            parts: [{ kind: "text", text: answer }] },
+                append: false, lastChunk: true } }));
+    push(events, stringify({ jsonrpc: "2.0", id: mid,
+      result: { taskId: tid, contextId: ctx, kind: "status-update",
+                status: { state: "completed", timestamp: str(now()) }, "final": true } }));
+    return { sse: events };
+  }
+
+  if (method == "message/send" or method == "tasks/send") {
+    let params = get(rpc, "params", {});
+    let question = a2a.message_text(params);
+    if (len(question) == 0) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32602, message: "params.message.parts 里没有 text" } };
+    }
+    let ctx = str(get(params, "contextId", ""));
+    if (len(ctx) == 0) { ctx = str(get(get(params, "message", {}), "contextId", "")); }
+    if (len(ctx) == 0) { ctx = peer.new_message_id(); }
+
+    // ---- 多轮续发: 客户端带 taskId 继续一个 input-required 任务 ----
+    let resume_id = str(get(params, "id", ""));
+    if (len(resume_id) == 0) { resume_id = str(get(get(params, "message", {}), "taskId", "")); }
+    if (len(resume_id) > 0) {
+      let existing = tasks.load(resume_id);
+      if (existing == null) {
+        return { jsonrpc: "2.0", id: mid,
+                 error: { code: -32001, message: "task not found: " + resume_id } };
+      }
+      let est = str(get(get(existing, "status", {}), "state", ""));
+      if (est == "completed" or est == "failed" or est == "canceled" or est == "rejected") {
+        return { jsonrpc: "2.0", id: mid,
+                 error: { code: -32004,
+                          message: "任务已终结(" + est + "), 不可恢复; 请在同一 contextId 下发起新任务" } };
+      }
+      // 数据节点不异步执行: 续发时当场重新判定并推进状态, 不留给 worker。
+      // (blog 会把状态交回 submitted 等 worker; 这里没有 worker, 自己算完。)
+      tasks.append_message(resume_id, "user", question);
+      let ans2 = answer_question(question);
+      if (ans2 == null) {
+        let t2 = tasks.transition_msg(resume_id, "input-required", get(existing, "artifacts", []),
+                                      "我还是没认出问题类型。可以问: 客户数 / 商机数 / 成交额 / 各阶段分布。");
+        return { jsonrpc: "2.0", id: mid, result: t2 };
+      }
+      let t3 = tasks.transition_msg(resume_id, "completed",
+                                    [a2a.text_artifact(resume_id, ans2)], "");
+      return { jsonrpc: "2.0", id: mid, result: t3 };
+    }
+
+    let tid = peer.new_task_id();
+
+    // ---- 异步模式: 落 submitted 就返回, 由调用方 tasks/get 轮询 ----
+    // 数据节点没有 worker, 所以这里**同步算完再落盘为 completed** ——
+    // 但保留 async 入口是为了让探针/客户端的"异步提交"路径能走通,
+    // 它们拿到的是一个已经是终态的任务(合法: 任务可以立刻完成)。
+    let cfg = get(params, "configuration", {});
+    let want_async = get(cfg, "async", false) == true;
+
+    if (want_async) {
+      // 异步提交: **只落 submitted 就返回**, 不在这里算答案。
+      //
+      // 为什么不能"立刻算完再标 completed": 规范的异步语义是"已受理, 稍后
+      // 取结果"。立刻终结会让调用方的轮询逻辑永远走不到"working"那段,
+      // 也让 tasks/cancel 永远返回 -32002(任务已完成) —— 探针实测报了这两条。
+      //
+      // 谁推进状态: 宿主的 scripts/a2a_worker.py 扫 .data/a2a-tasks/ 下的
+      // submitted 任务, 执行后置 completed。crm 和 blog 共用同一个 worker,
+      // 所以这里只要按同一套 payload 约定落盘即可。
+      let pl = get(params, "payload", null);
+      if (pl == null) { pl = { kind: "crm_inline", question: question }; }
+      let created = tasks.create(tid, ctx, pl);
+      return { jsonrpc: "2.0", id: mid, result: created };
+    }
+
+    let answer = answer_question(question);
+    if (answer == null) {
+      return { jsonrpc: "2.0", id: mid, result: a2a.task(tid, ctx, "input-required", [
+        a2a.text_artifact(tid, "我可以回答: 客户数/商机数/成交额(crm.stats)、各阶段分布(crm.pipeline)。请换个问法。")]) };
+    }
+    return { jsonrpc: "2.0", id: mid,
+             result: a2a.task(tid, ctx, "completed", [a2a.text_artifact(tid, answer)]) };
+  }
+
+  if (method == "tasks/get" or method == "GetTask") {
+    let params = get(rpc, "params", {});
+    let tid = str(get(params, "id", ""));
+    if (len(tid) == 0) {
+      return { jsonrpc: "2.0", id: mid, error: { code: -32602, message: "params.id 必填" } };
+    }
+    let t = tasks.load(tid);
+    if (t == null) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32001, message: "task not found: " + tid } };
+    }
+    return { jsonrpc: "2.0", id: mid, result: t };
+  }
+
+  if (method == "tasks/cancel" or method == "CancelTask") {
+    let params = get(rpc, "params", {});
+    let tid = str(get(params, "id", ""));
+    let t = tasks.load(tid);
+    if (t == null) {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32001, message: "task not found: " + tid } };
+    }
+    let st = str(get(get(t, "status", {}), "state", ""));
+    if (st == "completed" or st == "failed" or st == "canceled") {
+      return { jsonrpc: "2.0", id: mid,
+               error: { code: -32002, message: "task not cancelable (state=" + st + ")" } };
+    }
+    let c = tasks.transition(tid, "canceled", get(t, "artifacts", []));
+    return { jsonrpc: "2.0", id: mid, result: c };
+  }
+
+  return { jsonrpc: "2.0", id: mid,
+           error: { code: -32601, message: "method not found: " + method } };
+};
+
+// 把自然语言问题映射到一个工具。返回 null 表示认不出。
+// 刻意做得笨: 关键词匹配, 不调模型。数据节点没有 agent, 硬猜只会更糟 ——
+// 认不出时如实回 input-required, 让调用方换问法或直接调工具。
+func answer_question(q: string) {
+  let s = db.stats_payload();
+  if (len(str_match("阶段|分布|管道|pipeline", q)) > 0) {
+    let raw = get(s, "by_stage", {});
+    let ks = keys(raw);
+    let out = [];
+    let i = 0;
+    while (i < len(ks)) {
+      let k = str(get(ks, i, ""));
+      if (len(str_match("\\.amt$", k)) == 0) {
+        push(out, k + ": " + str(int(get(raw, k, 0))) + " 个 / "
+                  + str(float(get(raw, k + ".amt", 0))));
+      }
+      i = i + 1;
+    }
+    // lume 没有 join 内建, 用 reduce 拼 —— 数组可能为空, 所以给空串兜底。
+    let txt = reduce((a, b) => a + (len(a) > 0 ? "; " : "") + b, out, "");
+    return "各阶段商机分布: " + txt;
+  }
+  if (len(str_match("客户|商机|成交|金额|customer|deal", q)) > 0) {
+    return "客户数 " + str(int(get(s, "customer_count", 0)))
+         + "，商机数 " + str(int(get(s, "deal_count", 0)))
+         + "，开放管道金额 " + str(float(get(s, "open_pipeline", 0)))
+         + "，已成交 " + str(int(get(s, "won_deals", 0))) + " 单"
+         + "，成交率 " + str(float(get(s, "win_rate", 0)));
+  }
+  return null;
+};
+
+// 注册窗口关闭, 开始伺服。没有这行 route 表不会生效, 进程静默退出(rc=0),
+// 看起来像"启动了但连不上"—— 排查时最容易卡在这里。
+run();

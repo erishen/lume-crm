@@ -52,5 +52,100 @@ services:
       - crm_data:/app/.data    # SQLite 持久化
     restart: unless-stopped
 
+  # ---- peer 节点(局域网互通) ----
+  #
+  # 为什么要单独一个容器: 它是**另一个 server{}**(不同端口、不同信任边界),
+  # 不是 crm 主服务的一部分。放进同一进程会让"对外暴露的接口"与"有登录态的
+  # 业务页面"共用一条边界, 而这里两者该分开 —— peer 面走 HMAC 签名,
+  # 主服务走 Basic Auth + 分享链接。
+  #
+  # 镜像复用同一个(image: lume-crm:latest), 只是命令不同 —— 免得为了它
+  # 多打一个几乎一样的镜像。
+  #
+  # 是否启动由 **.env 决定**, 不需要记额外的命令行参数:
+  #
+  #   .env 里写  COMPOSE_PROFILES=peer   → docker compose up -d 会起它
+  #   .env 里不写这个变量               → 只起主服务(公网部署的默认形态)
+  #
+  # 为什么用 COMPOSE_PROFILES 而不是"总有这个服务 + 靠 env 判空":
+  # compose 没有条件启动的语法, 硬做只能让服务起来后自己检测配置再退出,
+  # 那会留下一个反复重启的容器(restart: unless-stopped 会一直拉)。
+  # COMPOSE_PROFILES 是 compose 原生支持的开关, 且 .env 里写一行就够。
+  peer:
+    profiles: ["peer"]
+    image: lume-crm:latest
+    container_name: lume-crm-peer
+    build: .
+    # 不发布到宿主: peer 面只给**其它 lume 应用**调用, 不是给人用浏览器打开的。
+    # 实际踩过: 早先映射了宿主端口, 结果打开那个端口期望看到 CRM 界面,
+    # 得到的是 peer 的 404(/api/stats 不存在) —— 一个端口两种语义, 必然混淆。
+    #
+    # expose 只在容器网络内可见; 配合下面的共享网 lume-peer-net,
+    # 让 lume-lan 等应用用 "<服务名>:18102" 直连, 全程不经过宿主。
+    expose:
+      - "18102"
+    environment:
+      # 密钥必填: 默认开启 peer 后, 若这里允许空值, 容器会起来但立刻自行禁用
+      # ("peer disabled: PEER_SHARED / PEER_ROOT not set") —— 一个健康检查通过、
+      # 却什么都干不了的容器, 比不起更难排查。用 ${VAR:?} 让 compose 在启动
+      # 前就报错并指明缺什么。
+      #
+      # 必须 0.0.0.0: Docker 的端口转发是从"容器 eth0"进来的, 绑 127.0.0.1
+      # 会让宿主的 -p 映射落不到服务上(表现为连接被立刻关闭)。实测踩过。
+      #
+      # lume 会因此打一条"无 Basic Auth 却监听全接口"的警告 —— 对 peer 是噪音:
+      # 它的鉴权是 HMAC 签名。真正的暴露面由宿主侧 ports 决定(只绑 127.0.0.1)。
+      LUME_BIND: "0.0.0.0"
+      PEER_NAME: "${PEER_NAME:-crm}"
+      PEER_PORT: "18102"
+      PEER_SHARED: "${PEER_SHARED:?peer 已默认开启, 请在 .env 配 PEER_SHARED(与访问方一致); 不想开就注释掉 COMPOSE_PROFILES=peer}"
+      PEER_ROOT: "${PEER_ROOT:-}"
+      PEER_SITE_NAME: "lume-crm"
+      # 关掉 MCP 工具加载。peer 面只用 db.stats_payload(), 完全不碰 MCP;
+      # 而镜像里带着 .data/mcp-servers-router.json(memory/think), 它们靠
+      # `npx` 启动 —— alpine 镜像里没有 node, 于是每次启动都刷两条
+      # "[mcp] memory: handshake failed"。那是噪音, 不是故障。
+      # MCP_ALLOW 设成一个不存在的 id 即可全部挡掉(空值 = 全放行)。
+      MCP_ALLOW: "__none__"
+      # 注册表路径(默认 .data/peers-identity.json, 但那里是只读卷)
+      PEER_REGISTRY: "/app/peer-identity/peers-identity.json"
+    volumes:
+      # 只读挂**宿主真实数据**而不是 crm_data 卷。
+      #
+      # 为什么: crm_data 是 compose 首次 created 的空卷, 里面只有 db.lume
+      # 首跑生成的种子数据(2 个客户), 与宿主 .data/crm.db(4 个客户)不是同一个库。
+      # 看板上看到的数会与你实际数据对不上, 而这种"差一点点"最难察觉。
+      #
+      # 只读挂载保证 peer 面**写不进**; 宿主那边可能还有原生进程在写,
+      # SQLite 的读并发本身是安全的(WAL/rollback journal 均可多读)。
+      - ./.data:/app/.data:ro
+      # 节点注册表: 决定"哪些节点名可以访问我"。热改不用重启 ——
+      # 这正是 identity.lume 优先读文件而不是只认 env 的原因(撤销一个节点
+      # 不该要重启所有服务)。
+      #
+      # 挂到 /app/peer-identity/ 而不是 /app/.data/: 后者是只读整卷,
+      # 往里再挂单个文件会让 runc 去只读文件系统上创建挂载点而失败
+      # ("create mountpoint ... read-only file system")。换个目录即可,
+      # 路径由 PEER_REGISTRY 告诉 lume。
+      - ./.data/peers-identity.json:/app/peer-identity/peers-identity.json:ro
+    command: ["/usr/local/bin/lume", "peer_node.lume"]
+    restart: unless-stopped
+    # 注意这里全用 map 形式(list 形式 "- default" 与本段的 map 键混用会让
+    # YAML 解析器在 "lume-peer-net:" 处报 expected <block end>)。
+    networks:
+      default: {}
+      # 跨应用的共享网。用 aliases 起个**全局唯一**的名字: 三个应用的服务
+      # 都叫 "peer", 在共享网里会重名冲突(DNS 只解析到一个, 访问谁全看运气)。
+      # 别名 = "<应用名>-peer", 看板侧就按这个名字配 PEER_TARGETS。
+      lume-peer-net:
+        aliases:
+          - crm-peer
+
 volumes:
   crm_data:
+
+networks:
+  # 预先创建一次: docker network create lume-peer-net
+  # 用 external: 三个应用各自独立部署, 谁先起都不该决定这个网的生命周期。
+  lume-peer-net:
+    external: true
