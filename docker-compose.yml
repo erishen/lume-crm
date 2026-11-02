@@ -49,7 +49,20 @@ services:
       # 访客明细保留期(天): 默认 90;0 = 不自动清理(不推荐)。
       LUME_CRM_VISIT_RETENTION_DAYS: "${LUME_CRM_VISIT_RETENTION_DAYS:-90}"
     volumes:
-      - crm_data:/app/.data    # SQLite 持久化
+      # 直接挂**宿主 .data**, 可写。与下面 peer 服务挂的是同一个目录。
+      #
+      # 为什么不用命名卷 crm_data: 卷与宿主 .data/crm.db 是**两份独立文件**,
+      # 于是出现下面这种最难察觉的问题 ——
+      #   * 通过 API 新增的客户写进了卷, 宿主库看不到;
+      #   * peer 读宿主库, 所以 lume-a2a 拿到的与 API 写的不是同一份;
+      #   * 清理测试数据时容器清了、peer 还看得见。
+      # 这个坑在 peer 服务的注释里早就记过(见下方), 但当时只修了 peer 一侧,
+      # 主服务还留着卷 —— 于是问题在"两边各修一半"的状态下继续存在。
+      #
+      # 改成宿主目录后: API 写的 = peer 读的 = 你在宿主看到的, 同一份。
+      # 代价是容器能改真实数据 —— 所以生产环境该配 LUME_CRM_READONLY=1
+      # (本机就是这样跑), 可写只在需要导入数据时临时开。
+      - ./.data:/app/.data
     restart: unless-stopped
 
   # ---- peer 节点(局域网互通) ----
@@ -142,6 +155,9 @@ services:
           - crm-peer
 
 volumes:
+  # crm_data 已不再使用: 主服务与 peer 现在都挂宿主 .data, 保证是同一份库。
+  # 保留这条声明是为了 `docker compose down` 不会因为"未知卷"报错;
+  # 里面可能还有历史数据, 确认不需要后可以 `docker volume rm lume-crm_crm_data`。
   crm_data:
 
 networks:

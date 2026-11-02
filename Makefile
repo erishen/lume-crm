@@ -33,11 +33,21 @@ CNAME     ?= lume-crm
 # 如 10080/6000/6665-6669 等, 否则浏览器 ERR_UNSAFE_PORT 打不开)
 DOCKER_PORT ?= 11080
 
+PYTHON ?= python3
+
 default: crm
 
 # ------------------------------------------------ check: Lume DSL 类型检查
 check:
 	@$(LUME) --check crm.lume
+
+# 数据一致性: 确认 API / peer / 宿主文件读的是同一份库。
+#
+# 为什么做成常驻目标而不是一次性修复: 这个问题出现过两次 —— 主服务与 peer
+# 各挂不同的位置, 于是"API 看到 8 个客户、peer 看到 6 个", 而 UI 上只表现为
+# 数字对不上一点点, 没人会往挂载上想。自动化检查比再写一遍注释可靠。
+consistency:
+	@"$(PYTHON)" scripts/check_data_consistency.py
 
 # ------------------------------------------------ ui: esbuild 构建前端产物
 # 入口 bundle 落 www/app.js(单入口,当前无共享 chunk;若日后拆多入口,
@@ -80,14 +90,10 @@ clean:
 # OrbStack 下 docker build 偶发 buildx 活动目录权限错, 先清掉再 build。
 docker-build:
 	@rm -rf $(HOME)/.docker/buildx/activity 2>/dev/null || true
-	@# lume-core/lib 在构建上下文之外(Docker 不允许 COPY ../), 先同步进来
-	@# 再由 Dockerfile COPY 到镜像根 /lume-core/lib —— 那是 peer_node.lume 里
-	@# "../lume-core/lib/peer.lume" 从 /app 解析出来的位置。
-	@if [ -d ../lume-core/lib ]; then \
-	  rm -rf .runtime/lume-core && mkdir -p .runtime/lume-core && \
-	  cp -R ../lume-core/lib .runtime/lume-core/; \
-	else \
-	  echo "✗ 找不到 ../lume-core/lib (应与 lume-crm 同级)" >&2; exit 1; fi
+	@# lume-core/lib 不再从 ../lume-core 复制: Dockerfile 按 LUME_CORE_VERSION
+	@# 从 release 下载。复制出来的副本没有版本标记, 会静默停在旧版 ——
+	@# 曾经因此报 "module 'peer' has no export 'config_warnings'",
+	@# 而报错指向调用点, 指向不到那份旧文件。
 	@$(DOCKER) build -t $(IMAGE) .
 
 # ------------------------------------------------ docker-run: 前台起容器(Ctrl-C 停)

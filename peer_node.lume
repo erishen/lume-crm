@@ -77,6 +77,18 @@ func tool_list() {
       desc: "按阶段统计的商机分布(数量 + 金额)",
       when_to_use: "用户问「各阶段各有多少商机」「管道卡在哪个阶段」时用。",
     },
+    {
+      name: "crm.stages",
+      desc: "按行业 × 商机阶段聚合(计数 + 金额), 不含客户明细",
+      when_to_use: "需要知道「某个行业有没有客户进入谈判阶段」时用。" +
+                   "只有行业与阶段, 拿不到客户名。",
+    },
+    {
+      name: "crm.industries",
+      desc: "客户按行业聚合(每个行业几个客户), 不含任何客户明细",
+      when_to_use: "需要知道「我们有哪些行业的客户」来做跨系统推荐时用。" +
+                   "只有行业与计数, 拿不到姓名/邮箱/电话。",
+    },
   ];
 }
 
@@ -116,6 +128,92 @@ get "/peer/info", (req) => {
   };
 };
 
+// 行业分布: 客户按行业聚合(数量 + 管道金额), **不含任何个人信息**。
+//
+// 为什么在现场算而不是把客户列表交出去:
+//   crm 的 peer 面刻意不转发客户明细(见 /peer/info 上方注释: 那是个人数据)。
+//   但"按行业推广"这个场景确实需要知道"我们有哪些行业的客户"。
+//   两者不冲突的解法只有一个 —— **在 crm 内部汇总, 只交出聚合数字**。
+//   交出 [{"industry":"金融","customers":1,"pipeline":45000}] 既够用,
+//   又不泄漏任何姓名、邮箱、电话。
+//
+// 行业归类规则与 lume-a2a 的 src/industry.lume 保持一致(关键词匹配)。
+// 为什么不抽成共享模块: 两个仓库各自独立发布, 共享一个 .lume 文件会让
+// 版本耦合; 而这张规则表很小, 重复一份的代价远低于建跨仓库依赖。
+// 代价是**改规则要改两处** —— 所以在返回里带上 map_version, 两边不一致时
+// 调用方能看出来。
+let INDUSTRY_RULES = [
+  { "kw": "资本", "industry": "金融" },
+  { "kw": "投资", "industry": "金融" },
+  { "kw": "证券", "industry": "金融" },
+  { "kw": "基金", "industry": "金融" },
+  { "kw": "银行", "industry": "金融" },
+  { "kw": "能源", "industry": "电力设备" },
+  { "kw": "科技", "industry": "信息技术" },
+  { "kw": "软件", "industry": "信息技术" },
+  { "kw": "网络", "industry": "信息技术" },
+  { "kw": "数据", "industry": "信息技术" },
+  { "kw": "汽车", "industry": "汽车" },
+  { "kw": "物流", "industry": "交通运输" },
+  { "kw": "航运", "industry": "交通运输" },
+  { "kw": "置业", "industry": "房地产" },
+  { "kw": "地产", "industry": "房地产" },
+  { "kw": "食品", "industry": "食品饮料" },
+  { "kw": "酒业", "industry": "食品饮料" },
+  { "kw": "钢", "industry": "钢铁" },
+];
+let INDUSTRY_MAP_VERSION = "2026-10-31b";
+
+func industry_of(company: string): string {
+  let c = str(company);
+  let i = 0;
+  while (i < len(INDUSTRY_RULES)) {
+    let r = get(INDUSTRY_RULES, i, {});
+    if (len(str_match("^.*" + str(get(r, "kw", "")) + ".*$", c)) > 0) {
+      return str(get(r, "industry", ""));
+    }
+    i = i + 1;
+  }
+  return "";
+}
+
+// 汇总: { industries: [{industry, customers, pipeline}], unclassified: n }
+//
+// 注意返回里**没有**客户名/公司名 —— 只有行业与数字。这是这条能力的边界,
+// 也是它能存在的原因。
+func industry_payload() {
+  let cs = db.customer_list("", "");
+  let acc = {};
+  let unclassified = 0;
+  let i = 0;
+  while (i < len(cs)) {
+    let c = get(cs, i, {});
+    let ind = industry_of(str(get(c, "company", "")));
+    if (len(ind) == 0) {
+      unclassified = unclassified + 1;
+    } else {
+      let n = int(get(acc, ind, 0)) + 1;
+      acc = put(acc, ind, n);
+    }
+    i = i + 1;
+  }
+  let out = [];
+  let ks = keys(acc);
+  let j = 0;
+  while (j < len(ks)) {
+    let k = str(get(ks, j, ""));
+    push(out, { industry: k, customers: int(get(acc, k, 0)) });
+    j = j + 1;
+  }
+  return {
+    industries: out,
+    unclassified: unclassified,
+    customer_count: len(cs),
+    map_version: INDUSTRY_MAP_VERSION,
+    note: "按 company 名称关键词归类; 仅返回行业聚合, 不含客户明细",
+  };
+}
+
 // 执行本节点声明的一个工具。body: {"tool":"<name>","arguments":{...}}
 // 白名单实现: 只认 tool_list() 里那两个, 未知名直接拒 —— 不像 agent 侧
 // 可以调任意已注册 MCP 工具。
@@ -147,6 +245,18 @@ post "/peer/invoke", (req) => {
     };
   }
 
+  if (tool_name == "crm.stages") {
+    return { ok: true, node: peer.node_info()["name"], "tool": tool_name,
+             result: db.industry_stage_payload(industry_of) };
+  }
+
+  if (tool_name == "crm.industries") {
+    return {
+      ok: true, node: peer.node_info()["name"], "tool": tool_name,
+      result: industry_payload(),
+    };
+  }
+
   if (tool_name == "crm.pipeline") {
     // by_stage 的键是 "阶段名" 与 "阶段名.amt"(金额), 摊平成两条数组更好用:
     // 调用方不必知道这个内部编码约定。
@@ -172,7 +282,7 @@ post "/peer/invoke", (req) => {
   }
 
   return { ok: false, "tool": tool_name,
-           error: "unknown tool '" + tool_name + "' (whitelist: crm.stats, crm.pipeline)" };
+           error: "unknown tool '" + tool_name + "' (whitelist: crm.stats, crm.pipeline, crm.industries, crm.stages)" };
 };
 
 // ══════════════════════════════════════════════════════════════════
