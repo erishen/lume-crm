@@ -33,8 +33,14 @@
 # (lume-lan 需要重编是因为它要主动打对端; 两者需求不同, 别照抄。)
 FROM alpine:3.20 AS fetch
 RUN apk add --no-cache ca-certificates curl tar
-ARG LUME_VERSION=v0.8.1
-RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/v0.8.1/install.sh" \
+# lume 版本。升到 v0.12.2 的两个理由:
+#   1) v0.12.2 起 http_* 返回 headers, 且带位运算(& ^ << >> / bitor);
+#   2) 旧版(<=v0.11)与新版 lume-core/lib 不匹配 —— crm 的 peer 用到
+#      config_warnings/key_mode/signing_string, 这些都是 v0.12 新增的诊断函数。
+ARG LUME_VERSION=v0.12.2
+# 注意 URL 里必须用 ${LUME_VERSION}, 不能像之前那样写死 "v0.8.1":
+# 写死的话改 ARG 不生效, 镜像悄悄停在旧版, 而 Dockerfile 看起来一切正常。
+RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/${LUME_VERSION}/install.sh" \
     | LUME_VERSION=${LUME_VERSION} LUME_STATIC=1 LUME_PREFIX=/usr/local sh
 
 # ---- 运行时(alpine, 极小) ----
@@ -53,8 +59,28 @@ COPY www/ ./www/
 COPY peer_node.lume ./
 # lume-core 的 peer 模块。peer_node.lume 里 import "../lume-core/lib/peer.lume",
 # 从 /app 看就是 /lume-core/lib/peer.lume —— 所以放在**根目录**下。
-# 构建上下文里没有它(在 ../lume-core), 由 make docker-build 先同步到 .runtime/。
-COPY .runtime/lume-core/lib/ /lume-core/lib/
+#
+# 从 release 取, 不再复制 ../lume-core/lib:
+# 复制出来的副本没有版本标记, lume-core 升级后它不会自己变。真实事故 ——
+# 这里曾放着 13KB 的旧 peer.lume(源码已 17KB), 症状是
+#   module 'peer' has no export 'config_warnings'
+# 报错指向调用点, 指向不到那份旧文件。按版本取则可复现、可校验。
+ARG LUME_CORE_VERSION=v0.12.1
+RUN set -eux; \
+    case "${TARGETARCH:-arm64}" in \
+      amd64) carch=x64 ;; \
+      arm64) carch=arm64 ;; \
+      *) echo "unsupported TARGETARCH='${TARGETARCH}'" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/erishen/lume-core/releases/download/${LUME_CORE_VERSION}"; \
+    asset="lume-core-linux-${carch}"; \
+    curl -fsSL --retry 3 --retry-delay 2 -o /tmp/core.tar.gz "${base}/${asset}.tar.gz"; \
+    curl -fsSL --retry 3 -o /tmp/core.sha256 "${base}/${asset}.sha256"; \
+    (cd /tmp && sed "s|${asset}.tar.gz|core.tar.gz|" core.sha256 | sha256sum -c -); \
+    mkdir -p /tmp/core && tar -xzf /tmp/core.tar.gz -C /tmp/core; \
+    mkdir -p /lume-core && cp -r "/tmp/core/${asset}/lib" /lume-core/lib; \
+    test -f /lume-core/lib/peer.lume; \
+    rm -rf /tmp/core /tmp/core.tar.gz /tmp/core.sha256
 COPY .env.example ./.env.example
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
