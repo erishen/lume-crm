@@ -22,9 +22,9 @@
 # 前端 esbuild:优先 ./node_modules/.bin/esbuild(CRM 本地 npm install 后),
 # 其次 PATH 上的 esbuild,最后兜底 ../lume/frontend/node_modules(过渡用)。
 
-# 用**仓库里的** lume, 不用 ~/.local/bin/lume(那是旧版本, 与工作区源码
-# 不一致: 新语法不认识, --check 会漏报; 两个版本同时常驻还会争同一端口)。
-LUME      ?= ../lume/bin/lume
+# 运行时二进制 + lume-core 库都来自仓内 vendor/lume-core/(可复现、单独 clone 直接可跑),
+# 不再依赖兄弟 checkout 的 ../lume 或 ../lume-core。make bootstrap 可刷新到 pinned 版本。
+LUME      ?= vendor/lume/bin/lume
 PORT      ?= 8089
 DOCKER    ?= /usr/local/bin/docker
 IMAGE     ?= lume-crm:latest
@@ -37,8 +37,18 @@ PYTHON ?= python3
 
 default: crm
 
+# ── vendor: 让项目自带解释器 + lume-core 库, 不再依赖兄弟 checkout ──
+# 已在场且能 check 就跳过, 缺失/不匹配才重新拉。bin/ 不入库、lib/ 入库。
+vendor:
+	@bash scripts/vendor_lume.sh --check >/dev/null 2>&1 \
+		|| bash scripts/vendor_lume.sh
+
+# 强制刷新(本地 checkout 改了、或想钉到另一个 pinned release 时用):
+bootstrap:
+	@bash scripts/vendor_lume.sh
+
 # ------------------------------------------------ check: Lume DSL 类型检查
-check:
+check: vendor
 	@$(LUME) --check crm.lume
 
 # 数据一致性: 确认 API / peer / 宿主文件读的是同一份库。

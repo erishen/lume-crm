@@ -21,7 +21,7 @@
 // * 写操作(新增/修改/删除客户与商机)**一律不开放**: 那需要 crm_lock()
 //   串行化与审计, 属于 CRM 自己的事务边界, 不该从外部绕过。
 // * 签名/防重放/明文传输的约束见 lume-core/lib/peer.lume 文件头。
-import "../lume-core/lib/peer.lume" as peer;
+import "vendor/lume-core/lib/peer.lume" as peer;
 import "src/db.lume" as db;
 import "src/a2a.lume" as a2a;
 import "src/a2a_tasks.lume" as tasks;

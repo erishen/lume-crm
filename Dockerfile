@@ -57,14 +57,18 @@ COPY www/ ./www/
 # peer 节点: 让 CRM 能被其它 lume 应用(如 lume-lan 的"应用互访")发现与查询。
 # 与 crm.lume **各自一个 server{}**, 主服务一行都不用改; 靠命令行动作选起哪个。
 COPY peer_node.lume ./
-# lume-core 的 peer 模块。peer_node.lume 里 import "../lume-core/lib/peer.lume",
-# 从 /app 看就是 /lume-core/lib/peer.lume —— 所以放在**根目录**下。
+# 布局与源码 import 相对路径一致(容器 CWD=/app, import 相对所在文件目录解析):
+#   peer_node.lume 里 import "vendor/lume-core/lib/peer.lume" → /app/vendor/lume-core/lib
+# 这些是 **.lume 源码**(运行时读盘), 不编进二进制。
 #
 # 从 release 取, 不再复制 ../lume-core/lib:
 # 复制出来的副本没有版本标记, lume-core 升级后它不会自己变。真实事故 ——
 # 这里曾放着 13KB 的旧 peer.lume(源码已 17KB), 症状是
 #   module 'peer' has no export 'config_warnings'
 # 报错指向调用点, 指向不到那份旧文件。按版本取则可复现、可校验。
+# 注意: 容器实际跑的二进制是上面的 lume 静态包(v0.12.2), 这里只取它配对的
+# lume-core lib(保持 v0.12.1, 跟二进制同代); 路径必须与源码 import 对齐
+# (peer_node.lume 写 vendor/lume-core/lib/peer.lume → /app/vendor/lume-core/lib)。
 ARG LUME_CORE_VERSION=v0.12.1
 RUN set -eux; \
     case "${TARGETARCH:-arm64}" in \
@@ -78,8 +82,8 @@ RUN set -eux; \
     curl -fsSL --retry 3 -o /tmp/core.sha256 "${base}/${asset}.sha256"; \
     (cd /tmp && sed "s|${asset}.tar.gz|core.tar.gz|" core.sha256 | sha256sum -c -); \
     mkdir -p /tmp/core && tar -xzf /tmp/core.tar.gz -C /tmp/core; \
-    mkdir -p /lume-core && cp -r "/tmp/core/${asset}/lib" /lume-core/lib; \
-    test -f /lume-core/lib/peer.lume; \
+    mkdir -p /app/vendor/lume-core && cp -r "/tmp/core/${asset}/lib" /app/vendor/lume-core/lib; \
+    test -f /app/vendor/lume-core/lib/peer.lume; \
     rm -rf /tmp/core /tmp/core.tar.gz /tmp/core.sha256
 COPY .env.example ./.env.example
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
