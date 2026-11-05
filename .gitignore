@@ -38,3 +38,7 @@ bin/
 #   bin/lume-core 不入库 —— 二进制体积大、无法 code review; 由 vendor 目标按需拉取。
 #   .vendor-stamp 入库 —— 记录这份 vendor 来自哪个版本(bin 版本 + lib tag), 可查可复核。
 vendor/lume/bin/
+
+# skills/: 人写/agent 写的 prompt 素材, 运行期无任何机制加载(源码零引用),
+# 不入库。
+skills/
