@@ -58,11 +58,11 @@ XFO/CSP/Referrer,否则出现双头。`@crm_ratelimit` 因为要带 `Retry-After
 对应的 `lume` **v0.8.1**(2026-10-23)起已映射 `req.headers` 与
 `req.authorization`,容器/本机直接用该版本即可,**不再需要源码构建**。
 旧版二进制没有这两个字段 → 自动走 query fallback,功能不坏,只是 PIN 仍在 URL。
-未设 `LUME_CRM_VISIT_PIN` 时:只读演示(`LUME_CRM_READONLY=1`)一律 403
-(fail closed,防止忘配时 `/api/visits` 的 IP 列表裸奔);本地可写开发仍免 PIN。
+未设 `LUME_CRM_VISIT_PIN` 时:一律 403(fail closed,防止忘配时 `/api/visits` 的
+IP 列表裸奔);只读/可写模式一致,本地开发也需显式设置 PIN。
 
 - [x] `lume` v0.8.1 已发布(含 bridge 的 `req.headers` / `req.authorization`)。
-- [x] 只读模式下未配 PIN 时 `/api/visits` fail closed(403),避免漏配裸奔。
+- [x] 未配 PIN 时 `/api/visits` 一律 fail closed(403),避免漏配裸奔。
 - [x] lume-crm 镜像/本机二进制升级到 v0.8.1(`Dockerfile` 的
       `ARG LUME_VERSION=v0.8.1` 已 pin),镜像重建验证通过。
 - [ ] 把 `LUME_CRM_VISIT_PIN` 重新生成成 `openssl rand -hex 32`,
@@ -166,7 +166,7 @@ XFO/CSP/Referrer,否则出现双头。`@crm_ratelimit` 因为要带 `Retry-After
   分享页默认隐藏内部跟进 note。
 - `visits_full`/旧 `visits` 按 `LUME_CRM_VISIT_RETENTION_DAYS`(默认 90 天)
   清理;启动时 + 运行中每 24h;历史 referrer 启动时剥 query/hash。
-- PIN/token 在 access log / 301 中打码;只读未配 PIN 时访客统计 403。
+- PIN/token 在 access log / 301 中打码;未配 PIN 时访客统计 403。
 
 **仍需产品/合规决策(代码未做)**:
 

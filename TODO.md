@@ -69,7 +69,7 @@ P0 关闭;以下 P1 项按"虚构数据 + 只读"重排。
 - [ ] 重新生成 `LUME_CRM_VISIT_PIN` 为 `openssl rand -hex 32`,并
       `git log -S` 确认旧值没进过历史(过渡期 query 仍可读,新 PIN 需
       同时能走 header;部署后把 Nginx `?pin=` 打码保留作兜底)。
-- [x] 只读模式未配 PIN 时 `/api/visits` fail closed(403),避免漏配裸奔。
+- [x] 未配 PIN 时 `/api/visits` 一律 fail closed(403),避免漏配裸奔。
 
 ### P1 — `/share/customer?id=N` ID 枚举 → 已关闭(2026-10-23)
 
@@ -116,7 +116,7 @@ P1、`../lume-core/TODO.md` P11)。
 ## 部署核对清单(每次上线前跑 `sh check.sh`)
 
 - [ ] `LUME_CRM_READONLY=1` 生效(写 API 403 + Agent 工具白名单)。
-- [ ] `LUME_CRM_VISIT_PIN` 已设(只读模式未设时 `/api/visits` 403),分享 salt 已设。
+- [ ] `LUME_CRM_VISIT_PIN` 已设(未设时 `/api/visits` 403),分享 salt 已设。
 - [ ] 端口只绑 `127.0.0.1:8089`(VPS;本地联调可 `HOST_PORT=11080`),
       `ss -lntp` 无 `0.0.0.0:8089/11080`。
 - [ ] nginx `proxy_pass` 与容器宿主端口一致:VPS 8089(compose 默认 /

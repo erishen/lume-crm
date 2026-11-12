@@ -191,6 +191,11 @@ func cleanup_visits() {
   if (r2.err != null) {
     print("旧访客清理失败: " + r2.err);
   }
+  // bot_ips 也按保留期清理；留 1 天宽限，避免刚过期就被重新标记的竞态。
+  let rb = try(() => sql_write(crm_db, "DELETE FROM bot_ips WHERE until < ?", [int(now()) - 86400]));
+  if (rb.err != null) {
+    print("爬虫 IP 清理失败: " + rb.err);
+  }
   visit_last_cleanup = int(now());
 }
 
@@ -280,6 +285,7 @@ func ensure_db() {
     // sql_write 禁 ALTER/DROP,故新列只能落新表 + 一次性拷贝迁移(幂等)。
     "CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, referrer TEXT, ua TEXT, visitor TEXT, created INTEGER)",
     "CREATE TABLE IF NOT EXISTS visits_full (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, referrer TEXT, ua TEXT, visitor TEXT, ip TEXT, created INTEGER)",
+    "CREATE TABLE IF NOT EXISTS bot_ips (ip TEXT PRIMARY KEY, reason TEXT, until INTEGER, created INTEGER)",
     // 分享链接表:token 落库才能做 TTL/撤销/最后访问;老库 CREATE IF NOT EXISTS 自动补。
     "CREATE TABLE IF NOT EXISTS share_links (id INTEGER PRIMARY KEY AUTOINCREMENT, customer INTEGER NOT NULL, version INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, expires INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0, last_access INTEGER NOT NULL DEFAULT 0)",
   ];
@@ -337,6 +343,80 @@ func q(sql, params) {
     return [];
   }
   return r.ok;
+}
+
+// 云厂商第一节号清单。真实浏览器也可能从云主机/VPN 访问，所以只有再叠加
+// “云 IP 无来源/同 IP 多 UA” 才判为机器人，避免单凭 ASN 误杀。
+func cloud_ip_sql() {
+  return "ip LIKE '3.%' OR ip LIKE '13.%' OR ip LIKE '18.%' OR ip LIKE '20.%' OR ip LIKE '32.%' OR ip LIKE '34.%' OR ip LIKE '35.%' OR ip LIKE '40.%' OR ip LIKE '43.%' OR ip LIKE '44.%' OR ip LIKE '45.%' OR ip LIKE '50.%' OR ip LIKE '52.%' OR ip LIKE '54.%' OR ip LIKE '57.%' OR ip LIKE '64.%' OR ip LIKE '66.%' OR ip LIKE '69.%' OR ip LIKE '95.%' OR ip LIKE '98.%' OR ip LIKE '104.%' OR ip LIKE '108.%' OR ip LIKE '129.%' OR ip LIKE '135.%' OR ip LIKE '149.%' OR ip LIKE '158.%' OR ip LIKE '159.%' OR ip LIKE '165.%' OR ip LIKE '167.%' OR ip LIKE '173.%' OR ip LIKE '174.%' OR ip LIKE '185.%' OR ip LIKE '188.%' OR ip LIKE '195.%' OR ip LIKE '206.%' OR ip LIKE '213.%' OR ip LIKE '139.155.%'";
+}
+
+func cloud_ip(ip) {
+  let parts = split(ip, ".");
+  if (len(parts) < 2) { return false; }
+  let a = str(get(parts, 0, ""));
+  if (a == "3" or a == "13" or a == "18" or a == "20" or a == "32" or a == "34" or a == "35") { return true; }
+  if (a == "40" or a == "43" or a == "44" or a == "45" or a == "50" or a == "52" or a == "54" or a == "57") { return true; }
+  if (a == "64" or a == "66" or a == "69" or a == "95" or a == "98" or a == "104" or a == "108") { return true; }
+  if (a == "129" or a == "135" or a == "149" or a == "158" or a == "159" or a == "165" or a == "167") { return true; }
+  if (a == "173" or a == "174" or a == "185" or a == "188" or a == "195" or a == "206" or a == "213") { return true; }
+  if (a == "139" and str(get(parts, 1, "")) == "155") { return true; }
+  return false;
+}
+
+func ua_has(ua, needle) {
+  return replace(ua, needle, "") != ua;
+}
+
+func is_browser_ua(ua) {
+  if (not ua_has(ua, "Mozilla/")) { return false; }
+  return ua_has(ua, "Chrome/") or ua_has(ua, "Firefox/") or ua_has(ua, "Safari/");
+}
+
+func recent_multi_ua(ip, ua, since) {
+  let r = q("SELECT COUNT(DISTINCT ua) AS n FROM visits_full WHERE ip = ? AND ua IS NOT NULL AND ua <> '' AND ua <> ? AND created >= ?",
+    [ip, ua, since]);
+  return int(get(r, 0, {}), "n", 0) > 0;
+}
+
+func mark_bot_ip(ip, reason) {
+  let t = int(now());
+  let r = try(() => sql_write(crm_db,
+    "INSERT INTO bot_ips (ip, reason, until, created) VALUES (?, ?, ?, ?) ON CONFLICT(ip) DO UPDATE SET reason = excluded.reason, until = MAX(bot_ips.until, excluded.until)",
+    [ip, reason, t + 604800, t]));
+  if (r.err != null) {
+    print("visit 记录爬虫 IP 失败: " + r.err);
+  }
+}
+
+// 返回非空 reason = 该次访问按爬虫处理；只影响汇总，不删原始记录。
+func detect_bot(path, referrer, ua, ip, wd) {
+  if (wd == "true") { return "webdriver"; }
+  if (ip == "" or ip == null) { return ""; }
+  if (not cloud_ip(ip)) { return ""; }
+  if (not is_browser_ua(ua)) { return ""; }
+  if (recent_multi_ua(ip, ua, int(now()) - 600)) { return "cloud_multi_ua"; }
+  // 云主机无来源访问：正常读者通常带站内/外链来源；爬虫直接抓站内任意路径。
+  if (referrer == "") { return "cloud_no_referrer"; }
+  return "";
+}
+
+// 启动时把近期“云 IP + 同 IP 多 UA”的历史记录一次性标进 bot_ips。
+// 只补缺不续期: 已有记录 DO NOTHING, 保留首次 created/until; 运行中再次识别
+// 才由 mark_bot_ip 推 until。
+func seed_bot_ips() {
+  let t = int(now());
+  let since = t - 30 * 86400;
+  let sql = "INSERT INTO bot_ips (ip, reason, until, created) SELECT ip, 'cloud_multi_ua', ?, ? FROM visits_full WHERE ip IS NOT NULL AND ip <> '' AND (" + cloud_ip_sql() + ") AND created >= ? GROUP BY ip HAVING COUNT(DISTINCT ua) > 1 ON CONFLICT(ip) DO NOTHING";
+  let r = try(() => sql_write(crm_db, sql, [t + 2592000, t, since]));
+  if (r.err != null) {
+    print("visit 初始化爬虫 IP 失败: " + r.err);
+  }
+  let sql2 = "INSERT INTO bot_ips (ip, reason, until, created) SELECT ip, 'cloud_no_referrer', ?, ? FROM visits_full WHERE ip IS NOT NULL AND ip <> '' AND (" + cloud_ip_sql() + ") AND (referrer IS NULL OR referrer = '') AND created >= ? GROUP BY ip ON CONFLICT(ip) DO NOTHING";
+  let r2 = try(() => sql_write(crm_db, sql2, [t + 2592000, t, since]));
+  if (r2.err != null) {
+    print("visit 初始化无来源爬虫失败: " + r2.err);
+  }
 }
 
 // 时间戳显示:SQL 侧 strftime 只认 UTC,本地时区在 DSL 侧用内建 strftime
@@ -435,10 +515,23 @@ export func stats_payload() {
 // visits_full 表存 path/referrer(已剥 query)/ua/visitor/ip/时间。访客去重靠
 // 前端 localStorage 生成的 visitor id;IP 只认 nginx 覆写的 X-Real-IP
 // (回退 remote_addr),仅 owner 通过 PIN 门禁的 /api/visits 可见,线上 UI 不展示。
-export func record_visit(path, referrer, ua, visitor, ip) {
+// 公开埋点限流：同一 IP 在 window_seconds 内达到 limit 条就拒绝，避免脚本刷库。
+// 只读查询，不额外建表；窗口内已有的访问行同时用于汇总和限流。
+export func too_many_visits(ip, limit, window_seconds) {
+  if (ip == null or ip == "") { return false; }
+  let since = int(now()) - window_seconds;
+  let r = q("SELECT COUNT(*) AS n FROM visits_full WHERE ip = ? AND created >= ?", [ip, since]);
+  return int(get(r, 0, {}), "n", 0) >= limit;
+}
+
+export func record_visit(path, referrer, ua, visitor, ip, wd) {
   // 长时间运行的进程也要按保留期清理;最多每 24h 一次。
   if (visit_last_cleanup > 0 and int(now()) - visit_last_cleanup >= 86400) {
     cleanup_visits();
+  }
+  let reason = detect_bot(path, referrer, ua, ip, wd);
+  if (reason != "") {
+    mark_bot_ip(ip, reason);
   }
   let r = try(() => sql_write(crm_db,
     "INSERT INTO visits_full (path, referrer, ua, visitor, ip, created) VALUES (?, ?, ?, ?, ?, ?)",
@@ -465,6 +558,7 @@ export func visits_summary() {
   // 也被过滤,统计只剩真人访问。
   let bots = "ua IS NULL OR ua = '' OR ua LIKE '%googlebot%' OR ua LIKE '%googleother%' OR ua LIKE '%bingbot%' OR ua LIKE '%baiduspider%' OR ua LIKE '%yandexbot%' OR ua LIKE '%duckduckbot%' OR ua LIKE '%petalbot%' OR ua LIKE '%bytespider%' OR ua LIKE '%semrushbot%' OR ua LIKE '%ahrefsbot%' OR ua LIKE '%mj12bot%' OR ua LIKE '%sogou%' OR ua LIKE '%360spider%' OR ua LIKE '%ia_archiver%' OR ua LIKE '%archive.org_bot%' OR ua LIKE '%gptbot%' OR ua LIKE '%chatgpt-user%' OR ua LIKE '%ccbot%' OR ua LIKE '%applebot%' OR ua LIKE '%claudebot%' OR ua LIKE '%facebookexternalhit%' OR ua LIKE '%twitterbot%' OR ua LIKE '%linkedinbot%' OR ua LIKE '%pinterest%' OR ua LIKE '%telegrambot%' OR ua LIKE '%whatsapp%'";
   priv = priv + " OR " + bots;
+  priv = priv + " OR ip IN (SELECT ip FROM bot_ips WHERE until > " + str(int(now())) + ")";
   let total = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
   let today = int(get(q("SELECT COUNT(*) AS n FROM visits_full WHERE date(created,'unixepoch','localtime') = date('now','localtime') AND NOT (" + priv + ")", null), 0, {}), "n", 0);
   let uv = int(get(q("SELECT COUNT(DISTINCT visitor) AS n FROM visits_full WHERE NOT (" + priv + ")", null), 0, {}), "n", 0);
@@ -833,6 +927,7 @@ if (not crm_readonly) {
 // 幂等——表/种子都在,重复启动不重复灌。放在文件末尾:此时 q()/sql_* 助手
 // 已全部定义,ensure_db 内部调用才满足 Lume "被调函数先声明" 的顺序要求。
 ensure_db();
+seed_bot_ips();
 
 // 行业 × 商机阶段 聚合
 //

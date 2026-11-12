@@ -37,7 +37,7 @@ services:
       # LUME_AUTH_PASSWORD: "改成强密码"
       # HTPASSWD_FILE: "/app/auth/htpasswd"
       # ---- 访客统计 PIN(见 docs/HARDENING.md §3): 公网务必 >=32 hex 随机 ----
-      #      生成: openssl rand -hex 32,写入同目录 .env;只读模式下不配则 /api/visits 一律 403 ----
+      #      生成: openssl rand -hex 32,写入同目录 .env;不配则 /api/visits 一律 403 ----
       LUME_CRM_VISIT_PIN: "${LUME_CRM_VISIT_PIN:-}"
       # ---- 分享页防枚举 salt(见 docs/HARDENING.md §4): 建议 openssl rand -hex 32；
       #      不配则回退用 LUME_CRM_VISIT_PIN 派生,两者都无 → /share/* 一律 404 ----

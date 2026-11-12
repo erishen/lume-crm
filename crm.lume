@@ -58,10 +58,9 @@ func write_gate() {
   return null;
 }
 
-// 访客统计只给 owner 看:配置 LUME_CRM_VISIT_PIN 后,查询须通过门禁才放行,
-// 否则 403——统计(含 IP 列表)不暴露给公网访客。
-// 本地可写开发不设该 env = 免 PIN(自用便利);只读演示(LUME_CRM_READONLY=1)
-// 不设 = 403(fail closed),防止忘配 PIN 时访客统计裸奔。
+// 访客统计只给 owner 看:必须配置 LUME_CRM_VISIT_PIN,查询须通过门禁才放行,
+// 否则 403——统计(含 IP 列表)不暴露给公网访客。未配置时 fail closed
+// (只读/可写模式一致; 本地开发也请显式设置 PIN)。
 // 注意:变量名刻意避开 TOKEN/KEY/SECRET 等敏感词——lume 的 env() 会把
 // 含这些词的变量名按"未设置"处理(防 DSL 侧泄露密钥),会静默关闭门禁。
 //
@@ -113,14 +112,25 @@ func auth_pin(req) {
   return parts[0];
 }
 
+// 公开埋点的浏览器同源校验: Origin 存在时要求其 host 与 Host 头一致;
+// 无 Origin(服务端/旧客户端)不拦。request headers 不可见时 header_ci 返回 ""。
+func origin_ok(req) {
+  let origin = header_ci(req, "origin");
+  if (origin == null or origin == "") { return true; }
+  let host = header_ci(req, "host");
+  if (host == null or host == "") { return true; }
+  let o = lower(origin);
+  o = replace(replace(o, "https://", ""), "http://", "");
+  o = split(o, "/")[0];
+  // Host 取 hostname(忽略端口): 反代常用 `$host` 丢端口, 浏览器 Origin 仍可能带端口。
+  return split(o, ":")[0] == split(lower(host), ":")[0];
+}
+
 func visit_gate(req) {
   if (visit_pin == null or visit_pin == "") {
-    // 公网只读演示 fail closed:忘配 PIN 时不能把访客 IP 列表裸奔。
-    // 本地可写开发仍保留免 PIN 的便利。
-    if (crm_readonly) {
-      return { status: 403, body: { err: "访客统计 PIN 未配置" } };
-    }
-    return null;
+    // 公网 fail closed: 忘配 PIN 时不能把访客 IP 列表裸奔。
+    // 本地开发也需要显式配置 LUME_CRM_VISIT_PIN; 不再因为非只读模式而放行。
+    return { status: 403, body: { err: "访客统计 PIN 未配置" } };
   }
   let from_hdr = auth_pin(req);
   let from_query = get(req.query_params, "pin", "");
@@ -149,6 +159,26 @@ func body_of(req) {
   return { ok: r.ok, err: null };
 }
 
+// 埋点字段只留 path(剥 query/hash); 限制长度, 避免公开端点被塞超长字符串。
+func clean_url(s) {
+  if (s == null) {
+    return "";
+  }
+  let out = split(s, "?")[0];
+  out = split(out, "#")[0];
+  return out;
+}
+
+func cap(s, n) {
+  if (s == null) {
+    return "";
+  }
+  if (len(s) > n) {
+    return substr(s, 0, n);
+  }
+  return s;
+}
+
 // 助手结果 → HTTP 响应。助手返回的是稀疏 map(成功只有 ok、失败只有 err),
 // 成员访问在 Lume 里是严格的(缺键 500),跨稀疏 map 一律 get() 宽容读;
 // 只有 try() 的固定 {ok,err} map 才能用 r.err/r.ok 成员访问。
@@ -168,7 +198,7 @@ func resp(res, created) {
 // 把数据留在磁盘上。lume 的 headers 只在带 body 的 envelope 路径生效,
 // 所以用 helper 包一层,而不是直接返回裸 map。
 func no_store(body) {
-  return { headers: { "Cache-Control": "no-store" }, body: body };
+  return { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }, body: body };
 }
 
 get "/api/stats", (req) => {
@@ -187,61 +217,31 @@ get "/api/visits", (req) => {
 // X-Forwarded-For:客户端可伪造/拼接多值,会把假 IP 写进库。仅 owner 经
 // PIN 门禁可见;去重靠前端 localStorage 的 visitor id。
 // referrer 只留 origin+path,剥掉 query/hash,避免把第三方 URL 里的
-// token/搜索词等 PII 一起入库。
+// token/搜索词等 PII 一起入库。忽略 IP / 已知爬虫 UA 也先入库,只在
+// visits_summary() 的汇总口径排除,保留原始记录以便回溯。
 post "/api/visit", (req) => {
+  if (not origin_ok(req)) {
+    return { status: 403, body: { err: "origin 不允许" } };
+  }
   let b = body_of(req);
   if (b.err != null) {
     return { status: 400, body: { err: b.err } };
   }
-  let path = get(b.ok, "path", "");
-  let referrer = get(b.ok, "referrer", "");
-  if (referrer != null and referrer != "") {
-    referrer = split(referrer, "?")[0];
-    referrer = split(referrer, "#")[0];
-  }
-  let ua = get(b.ok, "ua", "");
-  let visitor = get(b.ok, "visitor", "");
+  let path = cap(clean_url(get(b.ok, "path", "")), 512);
+  if (path == "") { path = "/"; }
+  let referrer = cap(clean_url(get(b.ok, "referrer", "")), 1024);
+  let ua = cap(get(b.ok, "ua", ""), 512);
+  let visitor = cap(get(b.ok, "visitor", ""), 64);
+  if (visitor == "") { visitor = "anon"; }
   let ip = header_ci(req, "x-real-ip");
   if (ip == "" or ip == null) {
     ip = get(req, "remote_addr", "");
   }
-  // 忽略列表(env LUME_CRM_IGNORE_IPS,逗号分隔公网 IP,如自己的代理出口):
-  // 命中则不写入统计。值仅来自服务端配置;拼判断前清洗空格与单引号。
-  if (ip != "" and ip != null) {
-    let ignore = env("LUME_CRM_IGNORE_IPS");
-    if (ignore != null and ignore != "") {
-      ignore = replace(replace(ignore, " ", ""), "'", "");
-      let needle = "," + ip + ",";
-      if (replace("," + ignore + ",", needle, "") != "," + ignore + ",") {
-        return { ok: true };
-      }
-    }
+  let wd = cap(str(b.ok, "wd", ""), 8);
+  if (crmdb.too_many_visits(ip, 30, 60)) {
+    return { status: 429, body: { err: "请求过于频繁" } };
   }
-  // 爬虫 UA 不入库(常见搜索引擎/AI 爬虫)。DSL 暂无 lower/contains,
-  // 用 replace 做字面量包含判断,故大小写各列一个变体;查询层另有
-  // SQLite LIKE 兜底过滤历史数据(LIKE 对 ASCII 不区分大小写)。
-  let bots = [
-    "Googlebot", "googlebot", "GoogleOther", "googleother",
-    "Baiduspider", "baiduspider", "Bingbot", "bingbot",
-    "YandexBot", "yandexbot", "DuckDuckBot", "duckduckbot",
-    "PetalBot", "petalbot", "Bytespider", "bytespider",
-    "SemrushBot", "semrushbot", "AhrefsBot", "ahrefsbot",
-    "MJ12bot", "mj12bot", "Sogou", "sogou", "360Spider", "360spider",
-    "ia_archiver", "archive.org_bot", "GPTBot", "gptbot",
-    "ChatGPT-User", "chatgpt-user", "CCBot", "ccbot",
-    "Applebot", "applebot", "ClaudeBot", "claudebot",
-    "facebookexternalhit", "Twitterbot", "twitterbot",
-    "LinkedInBot", "linkedinbot", "Pinterest", "pinterest",
-    "TelegramBot", "telegrambot", "WhatsApp", "whatsapp"
-  ];
-  if (ua != "" and ua != null) {
-    for (b in bots) {
-      if (replace(ua, b, "") != ua) {
-        return { ok: true };
-      }
-    }
-  }
-  crmdb.record_visit(path, referrer, ua, visitor, ip);
+  crmdb.record_visit(path, referrer, ua, visitor, ip, wd);
   return { ok: true };
 };
 

@@ -147,6 +147,7 @@ export function apiRecordVisit(): Promise<{ ok: boolean }> {
     referrer: document.referrer,
     ua: navigator.userAgent,
     visitor,
+    wd: String(navigator.webdriver),
   });
 }
 
