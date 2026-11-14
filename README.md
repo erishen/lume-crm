@@ -285,3 +285,6 @@ An empty `LLM_API_KEY` in `.env` = offline demo engine; set it to use a real mod
 - **display data completed server-side**: customer-profile deals carry `updated_fmt`,
   activities are ordered `at DESC` (newest first) — the frontend does no re-sorting
   or timezone math, removing one copy of that logic
+
+## Related Articles
+- [Writing a Complete CRM with Lume: One Business Layer for Web and Agent](https://erishen.cn/lume_crm-en/)
