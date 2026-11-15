@@ -62,6 +62,10 @@ spec:
                   key: apikey
             - name: LLM_MODEL
               value: "auto"
+            # 访客统计:排除自己/运维 IP(与 tnsbp-lume 同款,记录时+汇总口径都过滤)。
+            # 101.87.156.69 / 101.87.131.159 = 自己的出口 IP; 47.101.189.64 = 服务器运维。
+            - name: LUME_CRM_IGNORE_IPS
+              value: "101.87.156.69,47.101.189.64,101.87.131.159"
           # SQLite 落 /app/.data；演示场景 emptyDir 即可（Pod 重建后由
           # src/db.lume 重新建库 + 种子）。要持久化换 hostPath/PVC。
           volumeMounts:
