@@ -37,7 +37,7 @@ RUN apk add --no-cache ca-certificates curl tar
 #   1) v0.12.2 起 http_* 返回 headers, 且带位运算(& ^ << >> / bitor);
 #   2) 旧版(<=v0.11)与新版 lume-core/lib 不匹配 —— crm 的 peer 用到
 #      config_warnings/key_mode/signing_string, 这些都是 v0.12 新增的诊断函数。
-ARG LUME_VERSION=v0.12.2
+ARG LUME_VERSION=v0.13.1
 # 注意 URL 里必须用 ${LUME_VERSION}, 不能像之前那样写死 "v0.8.1":
 # 写死的话改 ARG 不生效, 镜像悄悄停在旧版, 而 Dockerfile 看起来一切正常。
 RUN curl -sSfL "https://raw.githubusercontent.com/erishen/lume/${LUME_VERSION}/install.sh" \
