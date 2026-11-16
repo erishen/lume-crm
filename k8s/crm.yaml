@@ -66,6 +66,14 @@ spec:
             # 101.87.156.69 / 101.87.131.159 = 自己的出口 IP; 47.101.189.64 = 服务器运维。
             - name: LUME_CRM_IGNORE_IPS
               value: "101.87.156.69,47.101.189.64,101.87.131.159"
+            # 访客统计 PIN:仅 owner 可查 /api/visits(与 cicdkit SSH target 同值)。
+            # 明文放 Secret(lume-crm-visit/pin)，不进 git。创建：
+            #   kubectl create secret generic lume-crm-visit --from-literal=pin=<PIN>
+            - name: LUME_CRM_VISIT_PIN
+              valueFrom:
+                secretKeyRef:
+                  name: lume-crm-visit
+                  key: pin
           # SQLite 落 /app/.data；演示场景 emptyDir 即可（Pod 重建后由
           # src/db.lume 重新建库 + 种子）。要持久化换 hostPath/PVC。
           volumeMounts:
